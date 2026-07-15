@@ -1,0 +1,6 @@
+# Three.js Object Sculptor scripts have NO third-party dependencies.
+# Everything uses the Python 3.10+ standard library only (json, argparse, struct,
+# zlib, pathlib, math, subprocess). PNG maps and comparison sheets are written with
+# struct/zlib directly — no Pillow/numpy/OpenCV/Playwright required.
+#
+# Requires: python >= 3.10

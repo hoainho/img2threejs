@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Scratch / generated review artifacts (keep committed demos in assets/)
+*.tmp
