@@ -12,9 +12,25 @@ project earns trust instead of a spam label. Repo: https://github.com/hoainho/im
 - Lead with an honest scope line every time: strong for objects, stylized-only for characters.
   The demo GIF is a chest (its strongest result), not a person.
 
+## Submitted PRs (log)
+
+- awesome-threejs (AxiomeCG): https://github.com/AxiomeCG/awesome-threejs/pull/24 (Tools > 3D modeling)
+
 ## 1. three.js Discourse — Showcase category
 
 Venue: https://discourse.threejs.org/ (category: Showcase)
+
+Anti-spam / correctness rules for this forum (important):
+- Post in the "Showcase" category only. Do NOT use Help/Questions or unrelated threads.
+- New Discourse accounts start at trust level 0 and often CANNOT post links or images until they
+  reach TL1. Reach TL1 first: read several topics, spend a few minutes in the forum, enter a few
+  topics. Then your post with the repo link/GIF will not be auto-flagged.
+- One topic only. Do not create duplicates, do not bump, do not paste the same link into other
+  people's threads.
+- Disclose it is your own project, give an honest scope line, and ask a real question or invite
+  feedback/contributors — a pure "star my repo" post gets flagged.
+- Reply to every comment; engagement is what separates a showcase from spam.
+- Use an accurate, non-clickbait title and correct tags.
 
 Title: img2threejs - rebuild an object photo as a code-only procedural Three.js model
 
