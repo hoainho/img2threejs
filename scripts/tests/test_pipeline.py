@@ -112,6 +112,28 @@ class PipelineTest(unittest.TestCase):
                      "--pass-id", "lighting-pass")
         self.assertNotEqual(locked.returncode, 0)
 
+    def test_generate_factory_rejects_incomplete_manual_review_evidence(self):
+        run("new_sculpt_spec.py", "Oak", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        spec["reviewHistory"] = [{
+            "passId": "blockout",
+            "action": "continue",
+            "visualEvidence": {"renderScreenshot": str(self.render)},
+        }]
+        self.spec.write_text(json.dumps(spec))
+
+        orchestrator = run("sculpt_pass_orchestrator.py", "check", self.spec,
+                           "--pass-id", "structural-pass")
+        self.assertNotEqual(orchestrator.returncode, 0)
+
+        out = self.dir / "createObjectModel.ts"
+        generated = run("generate_threejs_factory.py", self.spec, "--out", out,
+                        "--pass-id", "structural-pass")
+        self.assertNotEqual(generated.returncode, 0)
+        message = generated.stdout + generated.stderr
+        self.assertIn("locked", message)
+        self.assertIn("visual comparison evidence", message)
+
     def test_comparison_sheet_packages_without_scoring(self):
         cmp = self.dir / "cmp.png"
         r = run("make_visual_comparison_sheet.py", "--reference", self.ref,
@@ -155,6 +177,11 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         spec = json.loads(self.spec.read_text())
         self.assertTrue(len(spec.get("reviewHistory", [])) >= 1)
+
+        out = self.dir / "createObjectModel.ts"
+        generated = run("generate_threejs_factory.py", self.spec, "--out", out,
+                        "--pass-id", "structural-pass")
+        self.assertEqual(generated.returncode, 0, generated.stderr)
 
     def test_pbr_extraction_runs(self):
         # low-detail synthetic image: either passes or refuses (non-zero) — both are valid,
