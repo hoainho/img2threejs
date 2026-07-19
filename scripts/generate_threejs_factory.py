@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from sculpt_pass_orchestrator import pass_specific_gaps
+from sculpt_pass_orchestrator import pass_specific_gaps, review_completes_pass
 
 
 VALID_PRIMITIVES = {
@@ -38,7 +38,6 @@ DEFAULT_PASS_ORDER = [
     "interaction-pass",
     "optimization-pass",
 ]
-VISUAL_PASS_IDS = set(DEFAULT_PASS_ORDER) - {"optimization-pass"}
 PASS_LEVELS = {
     "blockout": {"macro"},
     "structural-pass": {"macro", "meso"},
@@ -66,26 +65,16 @@ def pass_order(spec: dict[str, Any]) -> list[str]:
     return ids or DEFAULT_PASS_ORDER.copy()
 
 
-def review_visual_evidence(entry: dict[str, Any]) -> dict[str, Any]:
-    visual = entry.get("visualEvidence")
-    return visual if isinstance(visual, dict) else {}
-
-
-def review_completes_pass(entry: dict[str, Any], pass_id: str) -> bool:
-    if entry.get("passId") != pass_id or entry.get("action") != "continue":
-        return False
-    if pass_id in VISUAL_PASS_IDS and not review_visual_evidence(entry).get("renderScreenshot"):
-        return False
-    return True
-
-
 def completed_passes(spec: dict[str, Any], ids: list[str]) -> list[str]:
     history = spec.get("reviewHistory", [])
     if not isinstance(history, list):
         return []
     completed: list[str] = []
     for pass_id in ids:
-        if any(isinstance(entry, dict) and review_completes_pass(entry, pass_id) for entry in history):
+        if any(
+            isinstance(entry, dict) and review_completes_pass(spec, entry, pass_id)
+            for entry in history
+        ):
             completed.append(pass_id)
         else:
             break
@@ -112,7 +101,7 @@ def assert_pass_unlocked(spec: dict[str, Any], requested_pass: str) -> None:
     previous = ids[previous_index] if previous_index >= 0 else ""
     raise ValueError(
         f"build pass {requested_pass!r} is locked; complete {previous!r} first with "
-        "append_sculpt_review.py action=continue and browser screenshot evidence"
+        "append_sculpt_review.py action=continue and all required visual comparison evidence"
     )
 
 
