@@ -11,3 +11,6 @@ __pycache__/
 
 # Scratch / generated review artifacts (keep committed demos in assets/)
 *.tmp
+
+# Planning docs stay local-only — only feature commits go into history
+docs/PLAN_*.md
