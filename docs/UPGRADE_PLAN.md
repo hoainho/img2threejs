@@ -11,7 +11,7 @@ v1.2.0 implementation notes:
 Shipped in 1.1.0:
 - Schema: preSpecAssessment.detailInventory (+ targetMinDetails by complexity), objectClass.primaryDomain, preSpecAssessment.anatomy, top-level referenceCamera.
 - Gates: validate_sculpt_spec.py detail-inventory gate (count + component/material linkage + gloss/fastener checks) and character track gate (anatomy + character feature targets); both backward compatible.
-- References: detail-inventory.md, character-reconstruction.md, likeness-maximization.md; procedural-patterns.md detail + character recipes; validation-rubric.md character suitability branch.
+- References: detail-inventory.md, character-reconstruction.md, likeness-maximization.md; build_geometry_patterns.md detail + character recipes; validation-rubric.md character suitability branch.
 - Scripts: build_detail_inventory.py, extract_reference_landmarks.py, solve_reference_camera.py, delight_reference.py, bake_projected_texture.py.
 - Tests: 16 pass (8 new covering the schema, gates, backward compat, and new scripts). SKILL.md + README updated; version bumped to 1.1.0.
 
@@ -38,10 +38,10 @@ Two weaknesses in the current 1.0 pipeline:
 
 | Symptom | Root cause | Location |
 | --- | --- | --- |
-| Humans look nothing like the image | No anatomy/landmark/pose model; object-only geometry recipes | `references/procedural-patterns.md`, `scripts/new_pre_spec_assessment.py`, `scripts/new_sculpt_spec.py` |
+| Humans look nothing like the image | No anatomy/landmark/pose model; object-only geometry recipes | `references/build_geometry_patterns.md`, `scripts/new_pre_spec_assessment.py`, `scripts/new_sculpt_spec.py` |
 | Humans get rejected early | Rubric rejects hair/cloth-fold-dominant subjects | `references/validation-rubric.md` |
 | Whole-image score hides face/proportion errors | Feature gate has no anatomy features | `scripts/visual_feature_gate.py`, spec `featureReviewTargets` |
-| Small details missed | Detail density is one score; no inventory artifact or gate | `references/pre-spec-assessment.md`, `scripts/new_pre_spec_assessment.py`, `scripts/validate_sculpt_spec.py` |
+| Small details missed | Detail density is one score; no inventory artifact or gate | `references/intake_quality_contract.md`, `scripts/new_pre_spec_assessment.py`, `scripts/validate_sculpt_spec.py` |
 | No help inspecting detail zones | Probe returns metadata only | `scripts/probe_reference_image.py` |
 
 ## 3. Design principles (must hold across the upgrade)
@@ -116,7 +116,7 @@ Each entry states: where, what changes, how strong, which evidence supports it.
   - every detail `mapsTo` an existing component localFeature or material localOverride (no orphan prose).
   - a "detailed" object must carry material roughness variation + at least one bevel/edgeTreatment when the inventory lists gloss/bevel details.
   - gloss details require a low-roughness localOverride or clearcoat; fastener details require an instanced/repetition system or explicit small-count meso parts.
-- `references/browser-screenshot-feedback.md`: add a mandatory detail close-up review - grazing-light shot that must show bevel highlights, countable fasteners, legible linework, and stains in the correct regions. Add a per-detail checklist to the review sheet.
+- `references/feedback_render_capture.md`: add a mandatory detail close-up review - grazing-light shot that must show bevel highlights, countable fasteners, legible linework, and stains in the correct regions. Add a per-detail checklist to the review sheet.
 
 ### 4.5 Track A acceptance criteria
 
@@ -257,12 +257,12 @@ New files:
 - demo assets for one detailed object close-up and one high-likeness character (projection-based)
 
 Modified files:
-- `references/pre-spec-assessment.md` (detail inventory + domain + anatomy)
-- `references/procedural-patterns.md` (character recipes + detail recipes)
+- `references/intake_quality_contract.md` (detail inventory + domain + anatomy)
+- `references/build_geometry_patterns.md` (character recipes + detail recipes)
 - `references/validation-rubric.md` (character suitability branch)
-- `references/material-lighting-realism.md` (skin/hair/cloth notes)
-- `references/browser-screenshot-feedback.md` (detail close-up + landmark overlay review)
-- `references/self-correction-loop.md` (character sub-pass guidance)
+- `references/feedback_shading_realism.md` (skin/hair/cloth notes)
+- `references/feedback_render_capture.md` (detail close-up + landmark overlay review)
+- `references/review_self_correction.md` (character sub-pass guidance)
 - `scripts/new_pre_spec_assessment.py`
 - `scripts/new_sculpt_spec.py`
 - `scripts/validate_sculpt_spec.py`

@@ -5,7 +5,7 @@ quality-gated Three.js model. Contributions that keep that identity sharp are ve
 
 ## Good first areas
 
-- New procedural material or geometry recipes in `references/procedural-patterns.md`.
+- New procedural material or geometry recipes in `references/build_geometry_patterns.md`.
 - Object-domain templates and detail-inventory taxonomy improvements.
 - Generator primitives, bevels, instancing, and surface-band tuning in `scripts/generate_threejs_factory.py`.
 - More pipeline tests in `scripts/tests/test_pipeline.py`.

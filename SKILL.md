@@ -46,7 +46,7 @@ Full flags: `references/scripts.md`. Never let a script *score* visuals — that
 
 1. Probe local images: `scripts/probe_reference_image.py <image>` (metadata only, not a visual check).
 2. **Pre-Spec Assessment Gate** — classify + score complexity + write the quality contract:
-   `scripts/new_pre_spec_assessment.py "Name" --image <img> --complexity <simple|moderate|complex|ultra-complex> --out assessment.json`. Rules: `references/pre-spec-assessment.md`.
+   `scripts/new_pre_spec_assessment.py "Name" --image <img> --complexity <simple|moderate|complex|ultra-complex> --out assessment.json`. Rules: `references/intake_quality_contract.md`.
    Set `objectClass.primaryDomain` (`object` | `character` | `hybrid`) and fill the seeded
    `detailInventory` (its `targetMinDetails` scales with complexity).
 2b. **Detail inventory** (do not skip for detailed subjects) — scan zones and enumerate every
@@ -66,7 +66,7 @@ Full flags: `references/scripts.md`. Never let a script *score* visuals — that
    Replace generic starter `featureReviewTargets` with the object's real identity-defining
    systems (≤5 critical, ≤3 important per pass); for characters add `anatomy-proportion`,
    `face-landmark-placement`, `pose-silhouette`, `outfit-and-palette`. Use 3D-graphics terms only
-   (`references/3d-graphics-terminology.md`), never "nice/smooth/shiny".
+   (`references/glossary_3d_vocabulary.md`), never "nice/smooth/shiny".
 4. When material fidelity matters and a source image exists, extract reference PBR evidence per crop:
    `scripts/extract_reference_pbr.py <crop> --out-dir <dir> --material-id <id> --target-threshold 0.7`.
    Confidence < 0.7 is a stop/refine-input signal, not a pass. It is inference, not inverse rendering.
@@ -93,13 +93,13 @@ Full flags: `references/scripts.md`. Never let a script *score* visuals — that
 - **Pre-spec / strict-quality**: blocks code gen until the spec is deep enough for its contract.
 - **Screenshot feedback**: `continue` is allowed only with a render + comparison sheet + global
   AI-vision score ≥ threshold (default 0.7) AND every critical feature ≥ its own threshold.
-  Details + per-layer scorecard: `references/browser-screenshot-feedback.md`.
+  Details + per-layer scorecard: `references/feedback_render_capture.md`.
 - **Action-ready**: build a runtime hierarchy (pivots, sockets, colliders, destruction groups),
-  never an inert lump; expose `root.userData.sculptRuntime`. `references/action-ready-models.md`.
+  never an inert lump; expose `root.userData.sculptRuntime`. `references/readiness_action_rigging.md`.
 - **Attachment**: child appendages (branches/limbs/handles/tubes) need `attachment.parentSocket`,
   `localStart`, `localEnd`, `contactType`, `embedDepth`/`overlap`, `gapTolerance` — no mid-air parts.
-  `references/attachment-joint-correctness.md`.
-- **Material/lighting**: `references/material-lighting-realism.md` — independent PBR channels
+  `references/readiness_joint_attachment.md`.
+- **Material/lighting**: `references/feedback_shading_realism.md` — independent PBR channels
   (never alias albedo into roughness/normal/AO), macro/meso/micro frequency bands, real lights.
 - **Detail inventory**: for `moderate`+ subjects strict-quality blocks code gen until the
   `detailInventory` reaches `targetMinDetails` and every detail maps to a real component/material
@@ -117,7 +117,7 @@ Full flags: `references/scripts.md`. Never let a script *score* visuals — that
 After every pass, decide exactly one: `continue | refine-spec | refine-code | request-input | stop`.
 `refine-spec` fixes a wrong/missing/shallow spec (re-validate, don't patch code around it);
 `refine-code` fixes geometry/material/lighting that doesn't match a sound spec. Full root-cause
-guide + fidelity scale: `references/self-correction-loop.md`.
+guide + fidelity scale: `references/review_self_correction.md`.
 
 ## Implementation Rules (brief)
 
@@ -125,7 +125,7 @@ TypeScript + plain Three.js unless the project uses a wrapper. `Group` factory
 `createObjectNameModel(spec, options)`, reconstruction data kept separate from renderer objects,
 deterministic seeds for all procedural noise. Prefer primitives / `Shape` extrude / curve+tube /
 instancing / displacement / generated canvas textures before any external art. Full geometry &
-material recipes + hard-won failure patterns: `references/procedural-patterns.md`.
+material recipes + hard-won failure patterns: `references/build_geometry_patterns.md`.
 
 ## Output
 

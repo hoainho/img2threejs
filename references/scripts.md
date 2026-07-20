@@ -14,7 +14,7 @@ issues. Metadata only; not a substitute for visual inspection.
 ## new_pre_spec_assessment.py
 `new_pre_spec_assessment.py "Name" [--image IMG] [--complexity simple|moderate|complex|ultra-complex] --out assessment.json [--force]`
 Emits a pre-spec assessment + `qualityContract` skeleton. Refine `--complexity` after looking at
-the image. See `pre-spec-assessment.md` for the scoring axes and contract checklist.
+the image. See `intake_quality_contract.md` for the scoring axes and contract checklist.
 
 ## new_sculpt_spec.py
 `new_sculpt_spec.py "Name" [--image IMG] [--assessment assessment.json] --out object-sculpt-spec.json [--force]`
@@ -27,7 +27,7 @@ Normal: checks required fields, score ranges, material refs, component IDs, pare
 transforms, primitive names (warnings allowed). `--strict-quality`: promotes quality warnings to
 errors — blocks code gen when the spec is too shallow for its contract (min macro/meso/micro
 counts, material layers, repetition systems, review viewpoints, non-generic feature targets,
-material-pass locality, lighting-pass real lights). Fix per `pre-spec-assessment.md`.
+material-pass locality, lighting-pass real lights). Fix per `intake_quality_contract.md`.
 
 ## sculpt_pass_orchestrator.py
 - `status spec.json` — current unlocked pass + required evidence.
