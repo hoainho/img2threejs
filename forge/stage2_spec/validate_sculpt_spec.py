@@ -43,6 +43,42 @@ VALID_COMPONENT_LEVELS = {"macro", "meso", "micro"}
 VALID_COMPLEXITY_TIERS = {"unassessed", "simple", "moderate", "complex", "ultra-complex"}
 TERMINOLOGY_LIST_FIELDS = {"geometryTerms", "materialTerms", "lightingTerms"}
 VALID_REVIEW_ACTIONS = {"continue", "refine-spec", "refine-code", "request-input", "stop"}
+VALID_TOPOLOGY_CLASSES = {
+    "continuous-sculpt",
+    "assembled-solid",
+    "conforming-shell",
+    "surface-relief",
+    "fiber-strand",
+    "material-only",
+}
+# Plan 1.3 Workstream A: primitives that are structurally wrong for a given topology class.
+# Prevents "Flat-Projection Bias" (e.g. a continuous organic bulge picked as a box-stack).
+DISALLOWED_TOPOLOGY_PRIMITIVE_PAIRS: dict[str, set[str]] = {
+    "continuous-sculpt": {"box", "cylinder", "cone"},
+    "fiber-strand": {"box", "plane-card"},
+}
+TOPOLOGY_ALLOWED_HINT = {
+    "continuous-sculpt": "lathe, extrude, or curve-sweep",
+    "fiber-strand": "tube or instanced-cluster",
+}
+
+
+def schema_version_tuple(spec: dict[str, Any]) -> tuple[int, int]:
+    raw = spec.get("schemaVersion")
+    if not isinstance(raw, str):
+        return (0, 0)
+    parts = raw.split(".")
+    try:
+        return (int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
+    except ValueError:
+        return (0, 0)
+
+
+def requires_topology_classification(spec: dict[str, Any]) -> bool:
+    # Plan 1.3 Risk R2: only specs authored under schema 2.1+ are held to the new
+    # topologyClass/topologyRationale requirement, so pre-1.3 specs are not silently
+    # broken by a field they were never told to fill in.
+    return schema_version_tuple(spec) >= (2, 1)
 VISUAL_PASS_IDS = {
     "blockout",
     "structural-pass",
@@ -617,6 +653,62 @@ def validate_string_array(value: Any, label: str, errors: list[str]) -> None:
         errors.append(f"{label} must be an array of strings")
 
 
+VALID_MATERIAL_CLASSES = {
+    "metal", "plastic", "wood", "fabric", "skin", "glass", "ceramic", "rubber", "stone", "unknown",
+}
+RGBA_PATTERN = re.compile(r"^rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(0|1|0?\.\d+)\s*\)$")
+
+
+def is_rgba_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(RGBA_PATTERN.match(value.strip()))
+
+
+def validate_color_material_recipe(component_id: str, recipe: Any, warnings: list[str]) -> None:
+    """Plan 1.3 Workstream C: every non-material-only component needs a structured,
+    evidence-linked colorMaterialRecipe instead of bare-word colors. Fires as a
+    'quality:' warning so --strict-quality (not normal validation) enforces it,
+    matching the topologyClass gating above."""
+    if not isinstance(recipe, dict):
+        warnings.append(f"quality: component {component_id!r} is missing colorMaterialRecipe")
+        return
+    for field in ("dominantAlbedo", "secondaryAlbedo"):
+        if not is_rgba_string(recipe.get(field)):
+            warnings.append(
+                f"quality: component {component_id!r} colorMaterialRecipe.{field} must be an "
+                f"'rgba(r, g, b, a)' string"
+            )
+    material_class = recipe.get("materialClass")
+    if material_class not in VALID_MATERIAL_CLASSES:
+        warnings.append(
+            f"quality: component {component_id!r} colorMaterialRecipe.materialClass must be one "
+            f"of: {', '.join(sorted(VALID_MATERIAL_CLASSES))}"
+        )
+    confidence = recipe.get("materialClassConfidence")
+    if not is_number(confidence) or not (0.0 <= float(confidence) <= 1.0):
+        warnings.append(
+            f"quality: component {component_id!r} colorMaterialRecipe.materialClassConfidence "
+            f"must be a number between 0.0 and 1.0"
+        )
+    gradient = recipe.get("colorGradient")
+    if gradient is not None:
+        if not isinstance(gradient, dict) or gradient.get("type") not in {"linear", "radial"}:
+            warnings.append(
+                f"quality: component {component_id!r} colorMaterialRecipe.colorGradient.type "
+                f"must be 'linear' or 'radial'"
+            )
+        stops = gradient.get("stops") if isinstance(gradient, dict) else None
+        if not isinstance(stops, list) or len(stops) < 2:
+            warnings.append(
+                f"quality: component {component_id!r} colorMaterialRecipe.colorGradient.stops "
+                f"must have at least 2 entries"
+            )
+        elif any(not is_rgba_string(stop.get("color")) for stop in stops if isinstance(stop, dict)):
+            warnings.append(
+                f"quality: component {component_id!r} colorMaterialRecipe.colorGradient.stops[].color "
+                f"must be 'rgba(r, g, b, a)' strings"
+            )
+
+
 def validate_components(
     spec: dict[str, Any],
     material_ids: set[str],
@@ -643,6 +735,39 @@ def validate_components(
             errors.append(
                 f"component {component_id!r} primitive must be one of: {', '.join(sorted(VALID_PRIMITIVES))}"
             )
+        if requires_topology_classification(spec):
+            topology_class = component.get("topologyClass")
+            topology_rationale = component.get("topologyRationale")
+            if topology_class not in VALID_TOPOLOGY_CLASSES:
+                warnings.append(
+                    f"quality: component {component_id!r} missing or invalid topologyClass "
+                    f"(must be one of: {', '.join(sorted(VALID_TOPOLOGY_CLASSES))})"
+                )
+            else:
+                if not isinstance(topology_rationale, str) or not topology_rationale.strip():
+                    warnings.append(
+                        f"quality: component {component_id!r} topologyRationale is required alongside topologyClass"
+                    )
+                else:
+                    normalized_rationale = re.sub(r"[\s_-]+", "", topology_rationale.strip().lower())
+                    normalized_class = re.sub(r"[\s_-]+", "", topology_class.lower())
+                    if normalized_rationale == normalized_class:
+                        warnings.append(
+                            f"quality: component {component_id!r} topologyRationale restates the enum "
+                            f"value instead of citing visible evidence"
+                        )
+                disallowed = DISALLOWED_TOPOLOGY_PRIMITIVE_PAIRS.get(topology_class, set())
+                if primitive in disallowed:
+                    hint = TOPOLOGY_ALLOWED_HINT.get(topology_class, "an allowed primitive")
+                    warnings.append(
+                        f"quality: component {component_id!r} pairs topologyClass={topology_class!r} "
+                        f"with disallowed primitive {primitive!r} (use {hint} instead)"
+                    )
+                # Plan 1.3 Workstream C: gated on topologyClass (already required above),
+                # not colorMaterialRecipe.materialClass — that field only exists once the
+                # recipe is present, so using it as its own gate would be circular.
+                if topology_class != "material-only":
+                    validate_color_material_recipe(component_id, component.get("colorMaterialRecipe"), warnings)
         level = component.get("level")
         if level is not None and level not in VALID_COMPONENT_LEVELS:
             errors.append(f"component {component_id!r} level must be macro, meso, or micro")

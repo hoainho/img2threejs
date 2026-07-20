@@ -221,7 +221,19 @@ def scale_vector(component: dict[str, Any], transform: dict[str, Any]) -> str:
     return vector(None, [1, 1, 1])
 
 
-def geometry_for(primitive: str) -> str:
+class GeometryNotImplementedError(Exception):
+    """A component's primitive is a valid VALID_PRIMITIVES member but geometry_for()
+    has no codegen branch for it yet. Never silently substitute a box for this case —
+    that produced structurally-wrong renders (e.g. blade/knife primitives collapsing to
+    a generic box) with no signal that anything was wrong. See Plan 1.3 Workstream F."""
+
+
+_DEFAULT_EXTRUDE_PROFILE = {"points": [[-0.3, -0.3], [0.3, -0.3], [0.3, 0.3], [-0.3, 0.3]], "depth": 0.1}
+_DEFAULT_LATHE_PROFILE = {"points": [[0.3, -0.5], [0.15, 0.0], [0.3, 0.5]], "segments": 24}
+_DEFAULT_TUBE_PATH = {"points": [[0.0, -0.5, 0.0], [0.0, 0.5, 0.0]], "radius": 0.05, "closed": False}
+
+
+def geometry_for(primitive: str, component: dict[str, Any] | None = None) -> str:
     if primitive == "box":
         return "new THREE.BoxGeometry(1, 1, 1, 12, 12, 12)"
     if primitive in {"sphere", "ellipsoid"}:
@@ -236,7 +248,17 @@ def geometry_for(primitive: str) -> str:
         return "new THREE.TorusGeometry(0.45, 0.08, 24, 96)"
     if primitive == "plane-card":
         return "new THREE.PlaneGeometry(1, 1, 24, 24)"
-    return "new THREE.BoxGeometry(1, 1, 1, 8, 8, 8)"
+    descriptor = component.get("geometryDescriptor") if isinstance(component, dict) and isinstance(component.get("geometryDescriptor"), dict) else {}
+    if primitive == "extrude":
+        profile = descriptor.get("profile2D") if isinstance(descriptor.get("profile2D"), dict) else _DEFAULT_EXTRUDE_PROFILE
+        return f"buildExtrudeGeometry({json_literal(profile)})"
+    if primitive == "lathe":
+        profile = descriptor.get("latheProfile") if isinstance(descriptor.get("latheProfile"), dict) else _DEFAULT_LATHE_PROFILE
+        return f"buildLatheGeometry({json_literal(profile)})"
+    if primitive == "tube":
+        path = descriptor.get("tubePath") if isinstance(descriptor.get("tubePath"), dict) else _DEFAULT_TUBE_PATH
+        return f"buildTubeGeometry({json_literal(path)})"
+    raise GeometryNotImplementedError(primitive)
 
 
 def generate(spec: dict[str, Any], pass_id: str) -> str:
@@ -253,6 +275,7 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
 
     lines: list[str] = [
         "import * as THREE from 'three';",
+        "import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';",
         "",
         "export type ProceduralModelOptions = {",
         "  wireframe?: boolean;",
@@ -272,6 +295,45 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
         "};",
         "",
         "type SculptMaterialSpec = Record<string, any>;",
+        "",
+        "// Plan 1.3 Workstream F.5: real geometry for the primitives that previously fell",
+        "// through to a silent BoxGeometry fallback. bevelEnabled defaults to true on",
+        "// THREE.ExtrudeGeometry and rounds every corner — sharp/pointed profiles (blades,",
+        "// fork tines, spikes) need bevelEnabled: false plus lineTo()-only path segments",
+        "// near the tip, since a curve command cannot produce a true converging point.",
+        "function buildExtrudeShape(points: [number, number][]): THREE.Shape {",
+        "  const shape = new THREE.Shape();",
+        "  if (points.length > 0) {",
+        "    shape.moveTo(points[0][0], points[0][1]);",
+        "    for (let i = 1; i < points.length; i += 1) {",
+        "      shape.lineTo(points[i][0], points[i][1]);",
+        "    }",
+        "  }",
+        "  return shape;",
+        "}",
+        "",
+        "function buildExtrudeGeometry(profile: { points: [number, number][]; depth: number }): THREE.ExtrudeGeometry {",
+        "  const shape = buildExtrudeShape(profile.points);",
+        "  return new THREE.ExtrudeGeometry(shape, {",
+        "    depth: profile.depth,",
+        "    bevelEnabled: false,",
+        "    steps: 1,",
+        "  });",
+        "}",
+        "",
+        "function buildLatheGeometry(profile: { points: [number, number][]; segments?: number }): THREE.LatheGeometry {",
+        "  const points = profile.points.map(([x, y]) => new THREE.Vector2(Math.max(0.0001, x), y));",
+        "  return new THREE.LatheGeometry(points, profile.segments ?? 24);",
+        "}",
+        "",
+        "function buildTubeGeometry(",
+        "  path: { points: [number, number, number][]; radius?: number; radialSegments?: number; closed?: boolean },",
+        "): THREE.TubeGeometry {",
+        "  const vectors = path.points.map(([x, y, z]) => new THREE.Vector3(x, y, z));",
+        "  const curve = new THREE.CatmullRomCurve3(vectors, path.closed ?? false);",
+        "  const tubularSegments = Math.max(8, path.points.length * 6);",
+        "  return new THREE.TubeGeometry(curve, tubularSegments, path.radius ?? 0.05, path.radialSegments ?? 8, path.closed ?? false);",
+        "}",
         "",
         "function hashString(value: string): number {",
         "  let hash = 2166136261;",
@@ -398,6 +460,51 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
         "    Math.round(THREE.MathUtils.lerp(a[0], b[0], mix)),",
         "    Math.round(THREE.MathUtils.lerp(a[1], b[1], mix)),",
         "    Math.round(THREE.MathUtils.lerp(a[2], b[2], mix)),",
+        "  ];",
+        "}",
+        "",
+        "type ColorGradientStop = { offset: number; color: string };",
+        "type ColorGradientSpec = {",
+        "  type: 'linear' | 'radial';",
+        "  axis: [number, number];",
+        "  stops: ColorGradientStop[];",
+        "};",
+        "",
+        "function parseRgba(value: string): [number, number, number] {",
+        "  const match = /rgba?\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)/.exec(value);",
+        "  if (!match) return [138, 122, 95];",
+        "  return [Number(match[1]), Number(match[2]), Number(match[3])];",
+        "}",
+        "",
+        "// Analytical per-pixel gradient sample. The extraction schema's colorGradient carries",
+        "// exact rgba(...) stop colors (see extract_part_color_recipe.py), so this samples the",
+        "// same trend directly in JS math rather than round-tripping through a Canvas 2D",
+        "// createLinearGradient/createRadialGradient object — same visual result, and it composes",
+        "// directly with the existing noise/height-correlated colorVariation blend below.",
+        "function sampleColorGradient(gradient: ColorGradientSpec, u: number, v: number): [number, number, number] {",
+        "  const stops = gradient.stops.length >= 2 ? gradient.stops : [{ offset: 0, color: 'rgba(138,122,95,1)' }, { offset: 1, color: 'rgba(138,122,95,1)' }];",
+        "  let t: number;",
+        "  if (gradient.type === 'radial') {",
+        "    const [cx, cy] = gradient.axis;",
+        "    const dx = u - cx;",
+        "    const dy = v - cy;",
+        "    const maxRadius = Math.max(0.001, Math.hypot(Math.max(cx, 1 - cx), Math.max(cy, 1 - cy)));",
+        "    t = clamp01(Math.hypot(dx, dy) / maxRadius);",
+        "  } else {",
+        "    const [ax, ay] = gradient.axis;",
+        "    const projection = (u - 0.5) * ax + (v - 0.5) * ay;",
+        "    const maxProjection = 0.5 * (Math.abs(ax) + Math.abs(ay)) || 0.5;",
+        "    t = clamp01(projection / maxProjection + 0.5);",
+        "  }",
+        "  const scaled = t * (stops.length - 1);",
+        "  const index = Math.min(stops.length - 2, Math.max(0, Math.floor(scaled)));",
+        "  const mix = scaled - index;",
+        "  const a = parseRgba(stops[index].color);",
+        "  const b = parseRgba(stops[index + 1].color);",
+        "  return [",
+        "    THREE.MathUtils.lerp(a[0], b[0], mix),",
+        "    THREE.MathUtils.lerp(a[1], b[1], mix),",
+        "    THREE.MathUtils.lerp(a[2], b[2], mix),",
         "  ];",
         "}",
         "",
@@ -546,6 +653,7 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
         "  const roughnessVariation = clamp01(readLayerNumber(spec.roughness, ['variation'], 0.18));",
         "  const colorAmplitude = clamp01(readLayerNumber(spec.colorVariation, ['amplitude', 'variation'], 0.18));",
         "  const heightCorrelation = clamp01(readLayerNumber(spec.colorVariation, ['heightCorrelation'], 0.3));",
+        "  const colorGradient: ColorGradientSpec | undefined = spec.colorGradient;",
         "  for (let y = 0; y < size; y += 1) {",
         "    const v = y / size;",
         "    for (let x = 0; x < size; x += 1) {",
@@ -556,10 +664,17 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
         "      const colorNoise = sampleSurface(u, v, bands, seed + 15013);",
         "      heightField[index] = height;",
         "      roughnessField[index] = clamp01(baseRoughness + (roughNoise - 0.5) * roughnessVariation * 2);",
-        "      const paletteValue = clamp01(",
-        "        0.5 + (colorNoise - 0.5) * colorAmplitude * 2 + (height - 0.5) * heightCorrelation",
-        "      );",
-        "      const color = mixPalette(colors, paletteValue);",
+        "      let color: [number, number, number];",
+        "      if (colorGradient) {",
+        "        // Evidence-derived spatial gradient (Plan 1.3 Workstream C) takes priority",
+        "        // over the noise-based palette blend below — it is a measured trend, not a guess.",
+        "        color = sampleColorGradient(colorGradient, u, v);",
+        "      } else {",
+        "        const paletteValue = clamp01(",
+        "          0.5 + (colorNoise - 0.5) * colorAmplitude * 2 + (height - 0.5) * heightCorrelation",
+        "        );",
+        "        color = mixPalette(colors, paletteValue);",
+        "      }",
         "      writePixel(images.albedo.data, index * 4, color[0], color[1], color[2]);",
         "    }",
         "  }",
@@ -623,6 +738,21 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
         "    clearcoat: clamp01(readLayerNumber(spec.clearcoat, ['base', 'amount'], 0)),",
         "    clearcoatRoughness: clamp01(readLayerNumber(spec.clearcoatRoughness, ['base'], 0.25)),",
         "    transmission: clamp01(readLayerNumber(spec.transmission, ['base', 'amount'], 0)),",
+        "    ior: Math.max(1, readLayerNumber(spec.ior, ['base', 'value'], 1.5)),",
+        "    thickness: Math.max(0, readLayerNumber(spec.thickness, ['base', 'amount'], 0)),",
+        "    attenuationDistance: Math.max(0.001, readLayerNumber(spec.attenuationDistance, ['base', 'value'], Infinity)),",
+        "    attenuationColor: new THREE.Color(typeof spec.attenuationColor === 'string' ? spec.attenuationColor : '#ffffff'),",
+        "    sheen: clamp01(readLayerNumber(spec.sheen, ['base', 'amount'], 0)),",
+        "    sheenColor: new THREE.Color(typeof spec.sheenColor === 'string' ? spec.sheenColor : '#ffffff'),",
+        "    sheenRoughness: clamp01(readLayerNumber(spec.sheenRoughness, ['base'], 1.0)),",
+        "    iridescence: clamp01(readLayerNumber(spec.iridescence, ['base', 'amount'], 0)),",
+        "    iridescenceIOR: Math.max(1, readLayerNumber(spec.iridescenceIOR, ['base', 'value'], 1.3)),",
+        "    anisotropy: clamp01(readLayerNumber(spec.anisotropy, ['base', 'amount'], 0)),",
+        "    anisotropyRotation: readLayerNumber(spec.anisotropy, ['rotation'], 0),",
+        "    specularIntensity: clamp01(readLayerNumber(spec.specularIntensity, ['base'], 1.0)),",
+        "    specularColor: new THREE.Color(typeof spec.specularColor === 'string' ? spec.specularColor : '#ffffff'),",
+        "    emissive: new THREE.Color(typeof spec.emissive === 'string' ? spec.emissive : '#000000'),",
+        "    emissiveIntensity: Math.max(0, readLayerNumber(spec.emissiveIntensity, ['base'], 1.0)),",
         "    opacity: clamp01(readLayerNumber(spec.opacity, ['base'], 1)),",
         "    transparent: readLayerNumber(spec.transmission, ['base', 'amount'], 0) > 0 || readLayerNumber(spec.opacity, ['base'], 1) < 1,",
         "    alphaTest: Math.max(0, readLayerNumber(spec.alpha, ['cutoff', 'alphaTest'], 0)),",
@@ -770,7 +900,7 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
                 f"  nodes[{json.dumps(component_id)}] = {node_var};",
                 f"  const {component_var}Geometry = {endpoint_var}",
                 f"    ? new THREE.CylinderGeometry({endpoint_var}.endRadius, {endpoint_var}.baseRadius, {endpoint_var}.length, 32, 12)",
-                f"    : {geometry_for(primitive)};",
+                f"    : {geometry_for(primitive, component)};",
                 f"  const {component_var} = new THREE.Mesh(",
                 f"    {component_var}Geometry,",
                 f"    materialMap[{json.dumps(material_id)}] ?? new THREE.MeshStandardMaterial({{ color: 0x888888 }})",
@@ -813,10 +943,6 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
                     f"  {node_var}.add({socket_var});",
                     f"  sockets[{json.dumps(socket_key)}] = {socket_var};",
                 ]
-            )
-        if primitive in {"tube", "lathe", "extrude", "curve-sweep", "instanced-cluster"}:
-            lines.append(
-                f"  // TODO: replace {component_id!r} box fallback with {primitive} procedural geometry."
             )
 
     look_dev_targets = spec.get("lookDevTargets", {})
@@ -867,6 +993,16 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
             "  return lights;",
             "}",
             "",
+            "// PBR materials (clearcoat/iridescence/transmission/anisotropy) need an environment",
+            "// map to visually behave as intended — call this once per renderer and assign the",
+            "// result to scene.environment before rendering. No external HDR asset required.",
+            f"export function create{type_name}Environment(renderer: THREE.WebGLRenderer): THREE.Texture {{",
+            "  const pmrem = new THREE.PMREMGenerator(renderer);",
+            "  const texture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;",
+            "  pmrem.dispose();",
+            "  return texture;",
+            "}",
+            "",
         ]
     )
     return "\n".join(lines)
@@ -896,7 +1032,15 @@ def main(argv: list[str]) -> int:
     if output.exists() and not args.force:
         parser.error(f"{output} already exists; use --force to overwrite")
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(generate(spec, pass_id), encoding="utf-8")
+    try:
+        rendered = generate(spec, pass_id)
+    except GeometryNotImplementedError as exc:
+        parser.error(
+            f"primitive {str(exc)!r} is accepted by validation but has no codegen "
+            f"implementation yet in geometry_for() — refine-spec to a supported primitive "
+            f"or implement it before generating this component"
+        )
+    output.write_text(rendered, encoding="utf-8")
     print(output)
     return 0
 

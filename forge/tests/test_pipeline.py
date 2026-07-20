@@ -74,7 +74,7 @@ class PipelineTest(unittest.TestCase):
                 "--out", self.spec)
         self.assertEqual(r.returncode, 0, r.stderr)
         spec = json.loads(self.spec.read_text())
-        self.assertEqual(spec["schemaVersion"], "2.0")
+        self.assertEqual(spec["schemaVersion"], "2.1")
         self.assertEqual(spec["targetName"], "Oak")
 
     def test_normal_validate_passes_strict_fails_on_shallow(self):
@@ -88,6 +88,101 @@ class PipelineTest(unittest.TestCase):
         strict = run("stage2_spec/validate_sculpt_spec.py", self.spec, "--strict-quality")
         self.assertNotEqual(strict.returncode, 0)
         self.assertIn("strict quality failure", strict.stdout + strict.stderr)
+
+    def test_topology_rejects_missing_classification(self):
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        del spec["componentTree"][0]["topologyClass"]
+        del spec["componentTree"][0]["topologyRationale"]
+        self.spec.write_text(json.dumps(spec))
+        strict = run("stage2_spec/validate_sculpt_spec.py", self.spec, "--strict-quality")
+        self.assertNotEqual(strict.returncode, 0)
+        self.assertIn("missing or invalid topologyClass", strict.stdout + strict.stderr)
+
+    def test_topology_rejects_restated_rationale(self):
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        spec["componentTree"][0]["topologyClass"] = "assembled-solid"
+        spec["componentTree"][0]["topologyRationale"] = "Assembled Solid"
+        self.spec.write_text(json.dumps(spec))
+        strict = run("stage2_spec/validate_sculpt_spec.py", self.spec, "--strict-quality")
+        self.assertNotEqual(strict.returncode, 0)
+        self.assertIn("restates the enum value", strict.stdout + strict.stderr)
+
+    def test_topology_rejects_disallowed_continuous_sculpt_pairing(self):
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        spec["componentTree"][0]["primitive"] = "box"
+        spec["componentTree"][0]["topologyClass"] = "continuous-sculpt"
+        spec["componentTree"][0]["topologyRationale"] = "Smooth organic bulge with no seams."
+        self.spec.write_text(json.dumps(spec))
+        strict = run("stage2_spec/validate_sculpt_spec.py", self.spec, "--strict-quality")
+        self.assertNotEqual(strict.returncode, 0)
+        self.assertIn("disallowed primitive", strict.stdout + strict.stderr)
+
+    def test_topology_rejects_disallowed_fiber_strand_pairing(self):
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        spec["componentTree"][0]["primitive"] = "plane-card"
+        spec["componentTree"][0]["topologyClass"] = "fiber-strand"
+        spec["componentTree"][0]["topologyRationale"] = "Thin repeated strand form."
+        self.spec.write_text(json.dumps(spec))
+        strict = run("stage2_spec/validate_sculpt_spec.py", self.spec, "--strict-quality")
+        self.assertNotEqual(strict.returncode, 0)
+        self.assertIn("disallowed primitive", strict.stdout + strict.stderr)
+
+    def test_topology_accepts_all_six_classes_with_allowed_primitives(self):
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        cases = [
+            ("continuous-sculpt", "lathe"),
+            ("assembled-solid", "box"),
+            ("conforming-shell", "plane-card"),
+            ("surface-relief", "box"),
+            ("fiber-strand", "tube"),
+            ("material-only", "plane-card"),
+        ]
+        for topology_class, primitive in cases:
+            with self.subTest(topology_class=topology_class):
+                spec["componentTree"][0]["primitive"] = primitive
+                spec["componentTree"][0]["topologyClass"] = topology_class
+                spec["componentTree"][0]["topologyRationale"] = (
+                    f"Test fixture citing observed evidence for {topology_class}."
+                )
+                self.spec.write_text(json.dumps(spec))
+                strict = run("stage2_spec/validate_sculpt_spec.py", self.spec, "--strict-quality")
+                self.assertNotIn(
+                    "topologyClass", strict.stdout + strict.stderr,
+                    f"unexpected topology failure for {topology_class}/{primitive}: {strict.stdout}{strict.stderr}",
+                )
+                self.assertNotIn(
+                    "disallowed primitive", strict.stdout + strict.stderr,
+                    f"unexpected disallowed-pairing failure for {topology_class}/{primitive}",
+                )
+
+    def test_diagnose_render_tier1_help_and_identical_images(self):
+        r = run("stage4_review/diagnose_render.py", "--help")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # Identical reference/render images should trivially pass every Tier-1 check.
+        r2 = run("stage4_review/diagnose_render.py", "--reference", self.ref, "--render", self.ref, "--json")
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        result = json.loads(r2.stdout)
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["checks"]["silhouetteIoU"], 1.0)
+
+    def test_orchestrator_refuses_current_pass_without_passing_tier1(self):
+        # Plan 1.3 Workstream D: the current (unlocked) VISUAL pass must be blocked
+        # until a passing tier1Result is recorded for it.
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        blocked = run("stage3_build/orchestrate_passes.py", "check", self.spec, "--pass-id", "blockout")
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn("Tier 1 diagnostics have not passed", blocked.stdout + blocked.stderr)
+
+        # Recording a PASSING tier1 result (identical ref/render) unblocks it.
+        run("stage4_review/diagnose_render.py", "--reference", self.ref, "--render", self.ref,
+            "--pass-id", "blockout", "--spec", self.spec, "--in-place")
+        unblocked = run("stage3_build/orchestrate_passes.py", "check", self.spec, "--pass-id", "blockout")
+        self.assertEqual(unblocked.returncode, 0, unblocked.stderr)
 
     def test_orchestrator_starts_at_blockout(self):
         run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
@@ -111,6 +206,86 @@ class PipelineTest(unittest.TestCase):
         locked = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out,
                      "--pass-id", "lighting-pass")
         self.assertNotEqual(locked.returncode, 0)
+
+    def test_generate_factory_emits_f3_f4_material_and_environment(self):
+        # Plan 1.3 F.3/F.4: previously-missing MeshPhysicalMaterial properties and the
+        # environment map must both appear in the generated code (codegen-output test,
+        # not a rendering test — fully automatable per the plan's acceptance criteria).
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        out = self.dir / "createObjectModel.ts"
+        r = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ts = out.read_text()
+        for prop in ("sheen:", "sheenColor:", "iridescence:", "iridescenceIOR:",
+                     "ior:", "attenuationDistance:", "anisotropy:", "anisotropyRotation:",
+                     "specularIntensity:", "specularColor:", "emissive:", "emissiveIntensity:"):
+            self.assertIn(prop, ts, f"missing material property in generated code: {prop}")
+        self.assertIn("import { RoomEnvironment }", ts)
+        self.assertIn("PMREMGenerator", ts)
+        self.assertIn("Environment(renderer: THREE.WebGLRenderer)", ts)
+
+    def test_generate_factory_builds_real_extrude_lathe_tube_geometry(self):
+        # Plan 1.3 F.5: the original bug — primitive: "extrude" (e.g. a knife blade
+        # tapering to a sharp point) used to validate fine but silently render as a
+        # generic box. Confirms all three previously-unimplemented primitives now
+        # produce real geometry-builder calls instead of raising or falling back.
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        spec["componentTree"][0]["primitive"] = "extrude"
+        spec["componentTree"][0]["topologyClass"] = "continuous-sculpt"
+        spec["componentTree"][0]["topologyRationale"] = "Blade tapering to a single sharp point."
+        spec["componentTree"][0]["geometryDescriptor"]["profile2D"] = {
+            "points": [[-0.05, 0.0], [0.05, 0.0], [0.0, 0.6]],  # converges to a real point
+            "depth": 0.02,
+        }
+        self.spec.write_text(json.dumps(spec))
+        out = self.dir / "createOakModel.ts"
+        r = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ts = out.read_text()
+        self.assertIn("buildExtrudeGeometry", ts)
+        self.assertIn("bevelEnabled: false", ts)
+        self.assertIn("shape.lineTo", ts)
+        self.assertNotIn("BoxGeometry(1, 1, 1, 8, 8, 8)", ts)  # the old silent fallback
+
+        for primitive, builder in (("lathe", "buildLatheGeometry"), ("tube", "buildTubeGeometry")):
+            with self.subTest(primitive=primitive):
+                spec["componentTree"][0]["primitive"] = primitive
+                self.spec.write_text(json.dumps(spec))
+                r2 = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out, "--force")
+                self.assertEqual(r2.returncode, 0, r2.stderr)
+                self.assertIn(builder, out.read_text())
+
+    def test_generate_factory_raises_named_error_for_unimplemented_primitive(self):
+        # F.1: curve-sweep and instanced-cluster are still genuinely unimplemented —
+        # must fail loudly (named error surfaced via parser.error), never silently box.
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        spec["componentTree"][0]["primitive"] = "curve-sweep"
+        self.spec.write_text(json.dumps(spec))
+        out = self.dir / "createOakModel.ts"
+        r = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("no codegen implementation yet", r.stdout + r.stderr)
+
+    def test_generate_factory_emits_color_gradient_codegen(self):
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        spec["materials"][0]["colorGradient"] = {
+            "type": "linear",
+            "axis": [1.0, 0.0],
+            "stops": [
+                {"offset": 0.0, "color": "rgba(60, 45, 30, 1.0)"},
+                {"offset": 1.0, "color": "rgba(200, 155, 120, 1.0)"},
+            ],
+        }
+        self.spec.write_text(json.dumps(spec))
+        out = self.dir / "createObjectModel.ts"
+        r = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ts = out.read_text()
+        self.assertIn("sampleColorGradient", ts)
+        self.assertIn("colorGradient", ts)
 
     def test_comparison_sheet_packages_without_scoring(self):
         cmp = self.dir / "cmp.png"
@@ -214,9 +389,44 @@ class PipelineTest(unittest.TestCase):
     def test_new_upgrade_scripts_help(self):
         for script in ("stage1_intake/build_detail_inventory.py", "stage1_intake/extract_landmarks.py",
                        "stage1_intake/solve_camera_pose.py", "stage1_intake/delight_albedo.py",
-                       "stage3_build/bake_projected_texture.py"):
+                       "stage3_build/bake_projected_texture.py", "stage1_intake/extract_part_color_recipe.py"):
             r = run(script, "--help")
             self.assertEqual(r.returncode, 0, f"{script}: {r.stderr}")
+
+    def test_extract_part_color_recipe_cache_hit_and_invalidation(self):
+        # Plan 1.3 Workstream E: same crop + unchanged script -> cache hit on 2nd run.
+        r1 = run("stage1_intake/extract_part_color_recipe.py", self.ref,
+                 "--component-id", "root")
+        self.assertEqual(r1.returncode, 0, r1.stderr)
+        self.assertFalse(json.loads(r1.stdout)["cacheHit"])
+
+        r2 = run("stage1_intake/extract_part_color_recipe.py", self.ref,
+                  "--component-id", "root")
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        self.assertTrue(json.loads(r2.stdout)["cacheHit"])
+
+        cache_file = self.ref.parent / ".cache" / "color_recipe_cache.json"
+        self.assertTrue(cache_file.exists())
+
+        # --no-cache bypasses the cache entirely, even with an existing hit available.
+        r3 = run("stage1_intake/extract_part_color_recipe.py", self.ref,
+                  "--component-id", "root", "--no-cache")
+        self.assertEqual(r3.returncode, 0, r3.stderr)
+        self.assertFalse(json.loads(r3.stdout)["cacheHit"])
+
+    def test_extract_part_color_recipe_patches_spec(self):
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        r = run("stage1_intake/extract_part_color_recipe.py", self.ref,
+                "--component-id", "root", "--spec", self.spec, "--in-place",
+                "--allow-low-confidence")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        recipe = json.loads(r.stdout)
+        self.assertIn("dominantAlbedo", recipe)
+        self.assertTrue(recipe["dominantAlbedo"].startswith("rgba("))
+        self.assertIn("materialClass", recipe)
+        spec = json.loads(self.spec.read_text())
+        self.assertIn("colorMaterialRecipe", spec["componentTree"][0])
+        self.assertEqual(spec["componentTree"][0]["colorMaterialRecipe"]["dominantAlbedo"], recipe["dominantAlbedo"])
 
     def test_build_detail_inventory_slices_zones(self):
         out = self.dir / "di.json"

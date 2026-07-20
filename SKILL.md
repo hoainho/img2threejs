@@ -66,7 +66,9 @@ Full flags: `grimoire/scripts.md`. Never let a script *score* visuals — that i
    Replace generic starter `featureReviewTargets` with the object's real identity-defining
    systems (≤5 critical, ≤3 important per pass); for characters add `anatomy-proportion`,
    `face-landmark-placement`, `pose-silhouette`, `outfit-and-palette`. Use 3D-graphics terms only
-   (`grimoire/glossary/3d_vocabulary.md`), never "nice/smooth/shiny".
+   (`grimoire/glossary/3d_vocabulary.md`), never "nice/smooth/shiny". Classify every component's
+   `topologyClass`/`topologyRationale` per `grimoire/intake/surface_topology.md` before picking a
+   `primitive` — this is what prevents a continuous organic form from being picked as a box.
 4. When material fidelity matters and a source image exists, extract reference PBR evidence per crop:
    `forge/stage1_intake/extract_pbr_evidence.py <crop> --out-dir <dir> --material-id <id> --target-threshold 0.7`.
    Confidence < 0.7 is a stop/refine-input signal, not a pass. It is inference, not inverse rendering.
@@ -90,6 +92,7 @@ Full flags: `grimoire/scripts.md`. Never let a script *score* visuals — that i
 ## Gates (do not skip)
 
 - **Suitability**: pass / conditional / reject before any planning. `grimoire/intake/validation_rubric.md`.
+- **Tier 1 (do first, free)**: "Tier 2 (AI-vision) never runs against a render that has not passed Tier 1." Run `forge/stage4_review/diagnose_render.py` (silhouette IoU/proportion/symmetry/per-part color) and record it (`--spec ... --in-place`) before requesting a comparison sheet; `orchestrate_passes.py check` refuses otherwise.
 - **Pre-spec / strict-quality**: blocks code gen until the spec is deep enough for its contract.
 - **Screenshot feedback**: `continue` is allowed only with a render + comparison sheet + global
   AI-vision score ≥ threshold (default 0.7) AND every critical feature ≥ its own threshold.
