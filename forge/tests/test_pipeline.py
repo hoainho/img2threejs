@@ -160,6 +160,25 @@ class PipelineTest(unittest.TestCase):
                     f"unexpected disallowed-pairing failure for {topology_class}/{primitive}",
                 )
 
+    def test_color_material_recipe_accepts_full_opacity_alpha_format(self):
+        # Regression: lab_to_rgba() in extract_part_color_recipe.py renders full opacity
+        # as "1.0" (round(1.0, 3) -> the float 1.0, not the bare int 1). RGBA_PATTERN must
+        # accept that exact format, or every real extracted recipe fails its own validator.
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        spec["componentTree"][0]["colorMaterialRecipe"] = {
+            "dominantAlbedo": "rgba(21, 87, 78, 1.0)",
+            "secondaryAlbedo": "rgba(34, 67, 67, 1.0)",
+            "materialClass": "glass",
+            "materialClassConfidence": 0.6,
+        }
+        self.spec.write_text(json.dumps(spec))
+        strict = run("stage2_spec/validate_sculpt_spec.py", self.spec, "--strict-quality")
+        self.assertNotIn(
+            "must be an 'rgba(r, g, b, a)' string", strict.stdout + strict.stderr,
+            f"1.0-alpha rgba string was wrongly rejected: {strict.stdout}{strict.stderr}",
+        )
+
     def test_diagnose_render_tier1_help_and_identical_images(self):
         r = run("stage4_review/diagnose_render.py", "--help")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -256,17 +275,96 @@ class PipelineTest(unittest.TestCase):
                 self.assertEqual(r2.returncode, 0, r2.stderr)
                 self.assertIn(builder, out.read_text())
 
-    def test_generate_factory_raises_named_error_for_unimplemented_primitive(self):
-        # F.1: curve-sweep and instanced-cluster are still genuinely unimplemented —
-        # must fail loudly (named error surfaced via parser.error), never silently box.
+    def test_generate_factory_omits_unused_geometry_helpers(self):
+        # Regression: a real showcase integration build failed TypeScript's
+        # noUnusedLocals because buildLatheGeometry/buildTubeGeometry were emitted
+        # unconditionally even when no component in the pass used lathe/tube. Only
+        # the primitives actually present should get a helper function.
         run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
         spec = json.loads(self.spec.read_text())
-        spec["componentTree"][0]["primitive"] = "curve-sweep"
+        spec["componentTree"][0]["primitive"] = "extrude"
+        spec["componentTree"][0]["topologyClass"] = "continuous-sculpt"
+        spec["componentTree"][0]["topologyRationale"] = "Blade tapering to a single sharp point."
+        spec["componentTree"][0]["geometryDescriptor"]["profile2D"] = {
+            "points": [[-0.05, 0.0], [0.05, 0.0], [0.0, 0.6]],
+            "depth": 0.02,
+        }
+        self.spec.write_text(json.dumps(spec))
+        out = self.dir / "createOakModel.ts"
+        r = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ts = out.read_text()
+        self.assertIn("buildExtrudeGeometry", ts)
+        self.assertNotIn("function buildLatheGeometry", ts)
+        self.assertNotIn("function buildTubeGeometry", ts)
+
+    def test_generate_factory_raises_named_error_for_unimplemented_primitive(self):
+        # F.1: instanced-cluster is still genuinely unimplemented — must fail loudly
+        # (named error surfaced via parser.error), never silently box. (curve-sweep is
+        # now implemented in F.6 — see test_generate_factory_builds_curve_sweep.)
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        spec["componentTree"][0]["primitive"] = "instanced-cluster"
         self.spec.write_text(json.dumps(spec))
         out = self.dir / "createOakModel.ts"
         r = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("no codegen implementation yet", r.stdout + r.stderr)
+
+    def test_generate_factory_builds_curve_sweep(self):
+        # F.6: curve-sweep sweeps a thin cross-section along a 3D spine so a curved form
+        # reads correctly from every angle (the karambit-blade fix). Must emit a real
+        # extrudePath + CatmullRomCurve3, only when a component uses curve-sweep.
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        spec["componentTree"][0]["primitive"] = "curve-sweep"
+        spec["componentTree"][0]["topologyClass"] = "continuous-sculpt"
+        spec["componentTree"][0]["topologyRationale"] = "Hooked blade curving through space."
+        spec["componentTree"][0]["geometryDescriptor"]["curveSweep"] = {
+            "spine": [[-0.5, -0.4, 0.0], [0.0, 0.1, 0.0], [0.5, -0.2, 0.0]],
+            "crossSection": {"points": [[-0.04, -0.02], [0.04, -0.02], [0.04, 0.02], [-0.04, 0.02]]},
+            "closed": False,
+        }
+        self.spec.write_text(json.dumps(spec))
+        out = self.dir / "createOakModel.ts"
+        r = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ts = out.read_text()
+        self.assertIn("buildCurveSweepGeometry", ts)
+        self.assertIn("extrudePath", ts)
+        self.assertIn("CatmullRomCurve3", ts)
+        self.assertIn("bevelEnabled: false", ts)
+        # conditional emission: a box-only spec must NOT carry the curve-sweep helper
+        spec["componentTree"][0]["primitive"] = "box"
+        self.spec.write_text(json.dumps(spec))
+        r2 = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out, "--force")
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        self.assertNotIn("function buildCurveSweepGeometry", out.read_text())
+
+    def test_flatness_pre_check_flags_thin_continuous_sculpt_extrude(self):
+        # G.1: a continuous-sculpt form (asserted to be a volumetric 3D shape) built as a
+        # THIN straight extrude (flat slab) must be flagged before render; the same form
+        # with real thickness must not.
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        c = spec["componentTree"][0]
+        c["primitive"] = "extrude"
+        c["topologyClass"] = "continuous-sculpt"
+        c["topologyRationale"] = "Hooked blade silhouette, single continuous form."
+        # thin slab (depth ≪ diagonal) under a continuous-sculpt claim → HIGH flatness risk
+        c["geometryDescriptor"]["profile2D"] = {
+            "points": [[0.0, 0.0], [0.5, 0.6], [1.0, 0.0], [0.5, -0.05]],
+            "depth": 0.02,
+        }
+        self.spec.write_text(json.dumps(spec))
+        strict = run("stage2_spec/validate_sculpt_spec.py", self.spec, "--strict-quality")
+        self.assertNotEqual(strict.returncode, 0)
+        self.assertIn("flatness risk", strict.stdout + strict.stderr)
+        # same profile with real depth (not a thin slab) must NOT trip the flatness gate
+        c["geometryDescriptor"]["profile2D"]["depth"] = 0.5
+        self.spec.write_text(json.dumps(spec))
+        strict2 = run("stage2_spec/validate_sculpt_spec.py", self.spec, "--strict-quality")
+        self.assertNotIn("flatness risk", strict2.stdout + strict2.stderr)
 
     def test_generate_factory_emits_color_gradient_codegen(self):
         run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)

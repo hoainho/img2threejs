@@ -63,6 +63,52 @@ TOPOLOGY_ALLOWED_HINT = {
 }
 
 
+# Plan 1.3 G.1 — spec-level flatness gate (the karambit-blade defect signature).
+# The robust discriminator is SEMANTIC, not a fragile geometric curvature estimate:
+# `continuous-sculpt` asserts "a continuous volumetric 3D form", so pairing it with a
+# THIN straight extrude (a flat slab) is a contradiction that will read as a flat plane
+# from non-reference angles. A legitimately flat object is tagged surface-relief /
+# conforming-shell / material-only, NOT continuous-sculpt, so it never reaches this gate.
+FLATNESS_DEPTH_RATIO_MAX = 0.15   # depth/diagonal below this ⇒ thin slab
+
+
+def _bbox_diagonal(points: list) -> float:
+    xs = [p[0] for p in points if isinstance(p, (list, tuple)) and len(p) >= 2]
+    ys = [p[1] for p in points if isinstance(p, (list, tuple)) and len(p) >= 2]
+    if not xs or not ys:
+        return 0.0
+    return ((max(xs) - min(xs)) ** 2 + (max(ys) - min(ys)) ** 2) ** 0.5
+
+
+def flatness_risk(component_id: str, component: dict[str, Any]) -> tuple[str, str]:
+    """Return ('HIGH'|'OK', message). HIGH when a component the spec declares to be a
+    continuous 3D form (`continuous-sculpt`, gated at the call site) is built as a THIN
+    straight extrude — a flat slab that only reads correctly from the reference angle.
+    The fix is `curve-sweep` (sweep a thin cross-section along a 3D spine)."""
+    descriptor = component.get("geometryDescriptor") if isinstance(component.get("geometryDescriptor"), dict) else {}
+    profile = descriptor.get("profile2D") if isinstance(descriptor.get("profile2D"), dict) else None
+    if not profile:
+        return ("OK", "")
+    points = profile.get("points")
+    depth = profile.get("depth")
+    if not isinstance(points, list) or not is_number(depth):
+        return ("OK", "")
+    diagonal = _bbox_diagonal(points)
+    if diagonal <= 0:
+        return ("OK", "")
+    depth_ratio = float(depth) / diagonal
+    if depth_ratio < FLATNESS_DEPTH_RATIO_MAX:
+        return (
+            "HIGH",
+            f"quality: component {component_id!r} flatness risk — declared continuous-sculpt (a "
+            f"continuous 3D form) but built as a thin straight extrude "
+            f"(depth/diagonal={depth_ratio:.3f} < {FLATNESS_DEPTH_RATIO_MAX}); it will read as a flat "
+            f"plane bent into a curve from non-reference angles. Use primitive 'curve-sweep' (sweep a "
+            f"thin cross-section along a 3D spine), or re-classify the topology if it really is flat.",
+        )
+    return ("OK", "")
+
+
 def schema_version_tuple(spec: dict[str, Any]) -> tuple[int, int]:
     raw = spec.get("schemaVersion")
     if not isinstance(raw, str):
@@ -656,7 +702,10 @@ def validate_string_array(value: Any, label: str, errors: list[str]) -> None:
 VALID_MATERIAL_CLASSES = {
     "metal", "plastic", "wood", "fabric", "skin", "glass", "ceramic", "rubber", "stone", "unknown",
 }
-RGBA_PATTERN = re.compile(r"^rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(0|1|0?\.\d+)\s*\)$")
+# Alpha accepts "0", "1", "0.xxx", "1.xxx", or ".xxx" — must match what lab_to_rgba() in
+# extract_part_color_recipe.py actually emits (round(alpha, 3) renders full opacity as "1.0",
+# not bare "1"), or every extracted recipe fails this check on its own real output.
+RGBA_PATTERN = re.compile(r"^rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:(?:0|1)(?:\.\d+)?|\.\d+)\s*\)$")
 
 
 def is_rgba_string(value: Any) -> bool:
@@ -768,6 +817,13 @@ def validate_components(
                 # recipe is present, so using it as its own gate would be circular.
                 if topology_class != "material-only":
                     validate_color_material_recipe(component_id, component.get("colorMaterialRecipe"), warnings)
+                # Plan 1.3 G.1: flatness pre-check — catch a flat extrude faking a curved
+                # 3D form BEFORE any render (the karambit-blade defect: a thin extrude of a
+                # curved silhouette only looks right from the reference camera angle).
+                if primitive == "extrude" and topology_class == "continuous-sculpt":
+                    severity, message = flatness_risk(component_id, component)
+                    if severity == "HIGH":
+                        warnings.append(message)
         level = component.get("level")
         if level is not None and level not in VALID_COMPONENT_LEVELS:
             errors.append(f"component {component_id!r} level must be macro, meso, or micro")

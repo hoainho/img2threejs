@@ -231,6 +231,15 @@ class GeometryNotImplementedError(Exception):
 _DEFAULT_EXTRUDE_PROFILE = {"points": [[-0.3, -0.3], [0.3, -0.3], [0.3, 0.3], [-0.3, 0.3]], "depth": 0.1}
 _DEFAULT_LATHE_PROFILE = {"points": [[0.3, -0.5], [0.15, 0.0], [0.3, 0.5]], "segments": 24}
 _DEFAULT_TUBE_PATH = {"points": [[0.0, -0.5, 0.0], [0.0, 0.5, 0.0]], "radius": 0.05, "closed": False}
+# Plan 1.3 F.6 — curve-sweep: a thin 2D cross-section swept along a measured 3D spine.
+# The FIX for curved forms (hooked blades, handles) that a flat extrude only renders
+# correctly from the reference camera angle. Default is a gentle S-curve so a missing
+# spine still produces a real swept solid, not a straight bar.
+_DEFAULT_CURVE_SWEEP = {
+    "spine": [[-0.5, -0.4, 0.0], [-0.1, 0.1, 0.0], [0.3, 0.2, 0.0], [0.6, -0.1, 0.0]],
+    "crossSection": {"points": [[-0.04, -0.02], [0.04, -0.02], [0.04, 0.02], [-0.04, 0.02]]},
+    "closed": False,
+}
 
 
 def geometry_for(primitive: str, component: dict[str, Any] | None = None) -> str:
@@ -258,6 +267,9 @@ def geometry_for(primitive: str, component: dict[str, Any] | None = None) -> str
     if primitive == "tube":
         path = descriptor.get("tubePath") if isinstance(descriptor.get("tubePath"), dict) else _DEFAULT_TUBE_PATH
         return f"buildTubeGeometry({json_literal(path)})"
+    if primitive == "curve-sweep":
+        sweep = descriptor.get("curveSweep") if isinstance(descriptor.get("curveSweep"), dict) else _DEFAULT_CURVE_SWEEP
+        return f"buildCurveSweepGeometry({json_literal(sweep)})"
     raise GeometryNotImplementedError(primitive)
 
 
@@ -296,45 +308,99 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
         "",
         "type SculptMaterialSpec = Record<string, any>;",
         "",
-        "// Plan 1.3 Workstream F.5: real geometry for the primitives that previously fell",
-        "// through to a silent BoxGeometry fallback. bevelEnabled defaults to true on",
-        "// THREE.ExtrudeGeometry and rounds every corner — sharp/pointed profiles (blades,",
-        "// fork tines, spikes) need bevelEnabled: false plus lineTo()-only path segments",
-        "// near the tip, since a curve command cannot produce a true converging point.",
-        "function buildExtrudeShape(points: [number, number][]): THREE.Shape {",
-        "  const shape = new THREE.Shape();",
-        "  if (points.length > 0) {",
-        "    shape.moveTo(points[0][0], points[0][1]);",
-        "    for (let i = 1; i < points.length; i += 1) {",
-        "      shape.lineTo(points[i][0], points[i][1]);",
-        "    }",
-        "  }",
-        "  return shape;",
-        "}",
-        "",
-        "function buildExtrudeGeometry(profile: { points: [number, number][]; depth: number }): THREE.ExtrudeGeometry {",
-        "  const shape = buildExtrudeShape(profile.points);",
-        "  return new THREE.ExtrudeGeometry(shape, {",
-        "    depth: profile.depth,",
-        "    bevelEnabled: false,",
-        "    steps: 1,",
-        "  });",
-        "}",
-        "",
-        "function buildLatheGeometry(profile: { points: [number, number][]; segments?: number }): THREE.LatheGeometry {",
-        "  const points = profile.points.map(([x, y]) => new THREE.Vector2(Math.max(0.0001, x), y));",
-        "  return new THREE.LatheGeometry(points, profile.segments ?? 24);",
-        "}",
-        "",
-        "function buildTubeGeometry(",
-        "  path: { points: [number, number, number][]; radius?: number; radialSegments?: number; closed?: boolean },",
-        "): THREE.TubeGeometry {",
-        "  const vectors = path.points.map(([x, y, z]) => new THREE.Vector3(x, y, z));",
-        "  const curve = new THREE.CatmullRomCurve3(vectors, path.closed ?? false);",
-        "  const tubularSegments = Math.max(8, path.points.length * 6);",
-        "  return new THREE.TubeGeometry(curve, tubularSegments, path.radius ?? 0.05, path.radialSegments ?? 8, path.closed ?? false);",
-        "}",
-        "",
+    ]
+
+    # Plan 1.3 Workstream F.5: real geometry for the primitives that previously fell
+    # through to a silent BoxGeometry fallback. Only emit the helper functions a
+    # primitive that's actually used in THIS pass's components needs — TypeScript
+    # projects commonly build with noUnusedLocals, and an always-emitted
+    # buildLatheGeometry/buildTubeGeometry fails that build the moment a spec (or a
+    # pass, since blockout only includes macro components) doesn't use them.
+    used_primitives = {str(component.get("primitive")) for component in components}
+    if "extrude" in used_primitives:
+        lines.extend(
+            [
+                "// bevelEnabled defaults to true on THREE.ExtrudeGeometry and rounds every",
+                "// corner — sharp/pointed profiles (blades, fork tines, spikes) need",
+                "// bevelEnabled: false plus lineTo()-only path segments near the tip, since a",
+                "// curve command cannot produce a true converging point.",
+                "function buildExtrudeShape(points: [number, number][]): THREE.Shape {",
+                "  const shape = new THREE.Shape();",
+                "  if (points.length > 0) {",
+                "    shape.moveTo(points[0][0], points[0][1]);",
+                "    for (let i = 1; i < points.length; i += 1) {",
+                "      shape.lineTo(points[i][0], points[i][1]);",
+                "    }",
+                "  }",
+                "  return shape;",
+                "}",
+                "",
+                "function buildExtrudeGeometry(profile: { points: [number, number][]; depth: number }): THREE.ExtrudeGeometry {",
+                "  const shape = buildExtrudeShape(profile.points);",
+                "  return new THREE.ExtrudeGeometry(shape, {",
+                "    depth: profile.depth,",
+                "    bevelEnabled: false,",
+                "    steps: 1,",
+                "  });",
+                "}",
+                "",
+            ]
+        )
+    if "lathe" in used_primitives:
+        lines.extend(
+            [
+                "function buildLatheGeometry(profile: { points: [number, number][]; segments?: number }): THREE.LatheGeometry {",
+                "  const points = profile.points.map(([x, y]) => new THREE.Vector2(Math.max(0.0001, x), y));",
+                "  return new THREE.LatheGeometry(points, profile.segments ?? 24);",
+                "}",
+                "",
+            ]
+        )
+    if "tube" in used_primitives:
+        lines.extend(
+            [
+                "function buildTubeGeometry(",
+                "  path: { points: [number, number, number][]; radius?: number; radialSegments?: number; closed?: boolean },",
+                "): THREE.TubeGeometry {",
+                "  const vectors = path.points.map(([x, y, z]) => new THREE.Vector3(x, y, z));",
+                "  const curve = new THREE.CatmullRomCurve3(vectors, path.closed ?? false);",
+                "  const tubularSegments = Math.max(8, path.points.length * 6);",
+                "  return new THREE.TubeGeometry(curve, tubularSegments, path.radius ?? 0.05, path.radialSegments ?? 8, path.closed ?? false);",
+                "}",
+                "",
+            ]
+        )
+    if "curve-sweep" in used_primitives:
+        lines.extend(
+            [
+                "// Plan 1.3 F.6 — sweep a thin 2D cross-section along a 3D spine so a curved",
+                "// form (hooked blade, handle) reads correctly from EVERY camera angle, not just",
+                "// the reference angle a flat extrude happens to match. Uses ExtrudeGeometry's",
+                "// native extrudePath; bevelEnabled: false keeps sharp tips (same rule as F.5).",
+                "function buildCurveSweepGeometry(",
+                "  sweep: { spine: [number, number, number][]; crossSection: { points: [number, number][] }; closed?: boolean },",
+                "): THREE.ExtrudeGeometry {",
+                "  const shape = new THREE.Shape();",
+                "  const cs = sweep.crossSection.points;",
+                "  if (cs.length > 0) {",
+                "    shape.moveTo(cs[0][0], cs[0][1]);",
+                "    for (let i = 1; i < cs.length; i += 1) shape.lineTo(cs[i][0], cs[i][1]);",
+                "    shape.closePath();",
+                "  }",
+                "  const spine = sweep.spine.map(([x, y, z]) => new THREE.Vector3(x, y, z));",
+                "  const path = new THREE.CatmullRomCurve3(spine, sweep.closed ?? false);",
+                "  return new THREE.ExtrudeGeometry(shape, {",
+                "    extrudePath: path,",
+                "    steps: Math.max(24, spine.length * 8),",
+                "    bevelEnabled: false,",
+                "  });",
+                "}",
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
         "function hashString(value: string): number {",
         "  let hash = 2166136261;",
         "  for (let index = 0; index < value.length; index += 1) {",
@@ -838,7 +904,8 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
         f"  root.name = {json.dumps(target)};",
         "",
         "  const materialMap: Record<string, THREE.Material> = {};",
-    ]
+        ]
+    )
     for material_id, material in materials.items():
         lines.extend(
             [
