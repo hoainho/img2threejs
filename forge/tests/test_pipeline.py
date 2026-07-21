@@ -243,6 +243,20 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("PMREMGenerator", ts)
         self.assertIn("Environment(renderer: THREE.WebGLRenderer)", ts)
 
+    def test_generate_factory_emits_auto_framing(self):
+        # Plan 1.3 §3.2: auto-framing by bounding box is a prerequisite for the Divine
+        # Eye — an object framed unlike the reference makes every silhouette comparison
+        # meaningless. The generated code must expose a frame<Type>Camera helper that
+        # positions the camera from the object's Box3 and updates the projection matrix.
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        out = self.dir / "createObjectModel.ts"
+        r = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ts = out.read_text()
+        self.assertIn("Camera(", ts)
+        self.assertIn("new THREE.Box3().setFromObject", ts)
+        self.assertIn("camera.updateProjectionMatrix()", ts)
+
     def test_generate_factory_builds_real_extrude_lathe_tube_geometry(self):
         # Plan 1.3 F.5: the original bug — primitive: "extrude" (e.g. a knife blade
         # tapering to a sharp point) used to validate fine but silently render as a
