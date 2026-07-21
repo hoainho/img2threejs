@@ -40,9 +40,16 @@ def silhouette_area_fraction(png_path: Path) -> float:
     """
     path = Path(png_path)
     width, height, pixels, _warnings = load_image(path)
-    mask, _diag, _mask_warnings = build_foreground_mask(width, height, pixels)
+    mask, _diag, mask_warnings = build_foreground_mask(width, height, pixels)
     total = len(mask)
     if total <= 0:
+        return 0.0
+    # HARDENING (lead, from the multiangle worker's finding): build_foreground_mask has
+    # a <3.5%-coverage safety fallback that INVERTS a tiny mask to "all opaque pixels"
+    # (coverage → ~1.0). For degenerate-view detection that is exactly backwards — a plane
+    # orbited edge-on yields a near-zero silhouette that MUST read as collapsed, not full.
+    # So when the fallback fired, report near-zero (the true, pre-inversion silhouette).
+    if any("tiny" in str(w).lower() for w in mask_warnings):
         return 0.0
     foreground = sum(1 for value in mask if value)
     return foreground / total

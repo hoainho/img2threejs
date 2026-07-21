@@ -81,14 +81,31 @@ class MultiAngleTest(unittest.TestCase):
         self.assertTrue(result["degenerate"])
         self.assertTrue(result["angles"][0]["degenerate"])
 
+    def test_vanished_edge_on_plane_flagged(self):
+        # HARDENING regression (lead): a plane orbited nearly edge-on produces a
+        # sub-3.5% silhouette. The shared segmenter's tiny-mask fallback would
+        # otherwise INVERT that to full-frame (fraction ~1.0) and MISS the collapse —
+        # a false negative on the exact case this check exists to catch. The fix in
+        # silhouette_area_fraction reports near-zero when the fallback fired, so a
+        # genuinely-vanished orbit angle is now flagged degenerate.
+        ref = self.tmp / "ref.png"
+        sliver = self.tmp / "vanished.png"
+        write_rgb_png(ref, 200, 200, _centered_block(20, 20, 180, 180))
+        # 3px strip ≈ 1.5% coverage → triggers the tiny-mask fallback
+        write_rgb_png(sliver, 200, 200, _centered_block(99, 0, 102, 200))
+        self.assertLess(silhouette_area_fraction(sliver), 0.02)  # near-zero, not inverted 1.0
+        result = analyze_angles(ref, [sliver])
+        self.assertTrue(result["degenerate"])
+        self.assertTrue(result["angles"][0]["degenerate"])
+
     def test_area_fraction_monotonic(self):
         big = self.tmp / "big.png"
         small = self.tmp / "small.png"
-        # Full-black frame: the whole frame is foreground -> fraction near 1.0.
-        write_rgb_png(big, 100, 100, lambda x, y, w, h: (0, 0, 0))
-        # Mostly white with a small dark dot -> much smaller foreground
-        # fraction (~0.16). Sized above the segmenter's tiny-mask floor (<3.5%
-        # coverage inverts to full-frame) so it reads as a genuine small area.
+        # A large dark object on WHITE (≈0.64 of frame) vs a small dark dot (≈0.16).
+        # (A full-black frame is NOT used: with no distinguishable background the
+        # segmenter's tiny-mask fallback fires and the area is reported near-zero —
+        # correct for degenerate-view, but a poor fixture for a size-monotonicity check.)
+        write_rgb_png(big, 100, 100, _centered_block(10, 10, 90, 90))
         write_rgb_png(small, 100, 100, _centered_block(30, 30, 70, 70))
 
         big_fraction = silhouette_area_fraction(big)
