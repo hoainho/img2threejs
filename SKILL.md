@@ -91,8 +91,26 @@ Full flags: `grimoire/scripts.md`. Never let a script *score* visuals — that i
 
 ## Gates (do not skip)
 
-- **Suitability**: pass / conditional / reject before any planning. `grimoire/intake/validation_rubric.md`.
-- **Tier 1 (do first, free)**: "Tier 2 (AI-vision) never runs against a render that has not passed Tier 1." Run `forge/stage4_review/diagnose_render.py` (silhouette IoU/proportion/symmetry/per-part color) and record it (`--spec ... --in-place`) before requesting a comparison sheet; `orchestrate_passes.py check` refuses otherwise.
+- **Suitability + reference integrity**: pass / conditional / reject before any planning
+  (`grimoire/intake/validation_rubric.md`), AND every reference admitted via
+  `forge/stage1_intake/check_reference_admission.py` (rejects empty/fragmented/tiny/duplicate/
+  undecodable refs with a reason). Intake understanding cross-checked by
+  `forge/stage1_intake/check_intake_correctness.py` (halts on a confident class contradiction).
+- **Divine Eye (the harness heart) — deterministic-first, model-last**: the render evaluator is
+  `forge/stage4_review/divine_eye.py` — a zero-token multi-signal ensemble (IoU/scale HARD gates;
+  proportion/symmetry-parity/pHash/SSIM/edge/blowout/flat/tonal-parity soft) with self-uncertainty
+  (`probe` on signal disagreement) and deterministic routing (`continue`/`refine-spec`/`refine-code`/
+  `probe`). The VLM (`forge/stage4_review/vlm_gate.py`) is a gated, calibrated, cross-checked
+  last layer: **never consulted on a hard-gate failure**, multi-sample-voted, and can rescue a
+  soft near-threshold reject but never grant past a hard geometric failure.
+- **Multi-angle or it didn't happen**: a non-planar form must hold from ≥2 camera angles.
+  `forge/stage4_review/diagnose_render_multi_angle.py` flags `degenerate-view` when an orbited
+  silhouette collapses (a flat plane faking a volume). Orbit angles use reference-free
+  self-consistency — never scored against a reference angle the photo doesn't cover.
+- **Bounded correction loop (token-burn safety)**: `forge/stage4_review/correction_loop.py`
+  guarantees termination (success/repeated-defect/oscillation/plateau/hard-ceiling), escalating to
+  `request-input` — never a silent infinite burn.
+- **Tier 1 (legacy, still valid)**: "Tier 2 (AI-vision) never runs against a render that has not passed Tier 1." Run `forge/stage4_review/diagnose_render.py` (silhouette IoU/proportion/symmetry/per-part color) and record it (`--spec ... --in-place`) before requesting a comparison sheet; `orchestrate_passes.py check` refuses otherwise.
 - **Pre-spec / strict-quality**: blocks code gen until the spec is deep enough for its contract.
 - **Screenshot feedback**: `continue` is allowed only with a render + comparison sheet + global
   AI-vision score ≥ threshold (default 0.7) AND every critical feature ≥ its own threshold.
