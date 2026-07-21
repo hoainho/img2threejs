@@ -257,6 +257,24 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("new THREE.Box3().setFromObject", ts)
         self.assertIn("camera.updateProjectionMatrix()", ts)
 
+    def test_generate_factory_emits_presentation_composer_only(self):
+        # Plan 1.3 §3.2c / R-POSTFX: DOF+bloom live in a SEPARATE presentation composer
+        # (opt-in via options), never wired into the model factory itself — the Eye's
+        # evaluation render must stay post-fx-free. Codegen-output test.
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        out = self.dir / "createObjectModel.ts"
+        r = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ts = out.read_text()
+        self.assertIn("PresentationComposer", ts)
+        self.assertIn("EffectComposer", ts)
+        self.assertIn("BokehPass", ts)
+        self.assertIn("UnrealBloomPass", ts)
+        self.assertIn("R-POSTFX", ts)
+        # the composer must be gated on options.dof / options.bloom (opt-in, not forced)
+        self.assertIn("if (options.dof)", ts)
+        self.assertIn("if (options.bloom)", ts)
+
     def test_generate_factory_builds_real_extrude_lathe_tube_geometry(self):
         # Plan 1.3 F.5: the original bug — primitive: "extrude" (e.g. a knife blade
         # tapering to a sharp point) used to validate fine but silently render as a
