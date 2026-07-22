@@ -14,9 +14,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "stage4_review"))
 from diagnose_render import (  # noqa: E402
     bbox_of,
     bilateral_symmetry_error,
+    color_is_gated,
     proportion_delta,
     silhouette_iou,
 )
+
+
+class ColorGateByPassTest(unittest.TestCase):
+    """Per-part color is a hard criterion only from material-pass onward.
+    Clay passes (blockout/structural/form) must not be failed on color they
+    deliberately lack (regression: teardrop-era blockout blocked by ΔE 56)."""
+
+    def test_pre_material_passes_are_not_color_gated(self):
+        for pid in ("blockout", "structural-pass", "form-refinement"):
+            self.assertFalse(color_is_gated(pid), pid)
+
+    def test_material_pass_and_later_are_color_gated(self):
+        for pid in ("material-pass", "surface-pass", "lighting-pass",
+                    "interaction-pass", "optimization-pass"):
+            self.assertTrue(color_is_gated(pid), pid)
+
+    def test_unknown_or_missing_pass_is_not_gated(self):
+        self.assertFalse(color_is_gated(None))
+        self.assertFalse(color_is_gated("not-a-real-pass"))
 
 
 def make_mask(size: int, foreground_fn) -> list[bool]:

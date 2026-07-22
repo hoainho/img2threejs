@@ -48,6 +48,8 @@ from diagnose_render import (  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "stage1_intake"))
 from extract_pbr_evidence import load_image  # noqa: E402
 
+from objectness import objectness_similarity  # noqa: E402  (stdlib OSIM-lite, same dir)
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "_shared"))
 from image_hash import normalized_similarity, phash_from_image  # noqa: E402
 
@@ -57,6 +59,9 @@ SCALE_HARD_MAX = 0.08
 # Ensemble: fidelity target + disagreement (self-uncertainty) spread.
 FIDELITY_TARGET = 0.85
 DISAGREEMENT_SPREAD = 0.35  # if soft-signal spread exceeds this ⇒ low-confidence → probe
+RECON_OBJ_MIN = 0.48        # objectness ≥ this rescues an IoU-only hard reject → probe (recon mode).
+#                            Separates same-object-different-framing (real pairs ~0.53–0.58) from a
+#                            genuinely different shape (~0.43). Rescue only ever downgrades reject→probe.
 LUMA_SIZE = 64   # SSIM / tonal / blowout / flat work on this downsampled luma grid
 EDGE_SIZE = 96   # edge overlap grid
 
@@ -187,6 +192,13 @@ def evaluate(reference_png: Path, render_png: Path) -> dict[str, Any]:
     edges = edge_overlap(ref_edge, ren_edge, EDGE_SIZE)
     blow = blowout_parity(ref_luma, ren_luma)
     tonal = tonal_parity(ref_luma, ren_luma)
+    # OSIM-lite objectness (stdlib HOG-like, bg/pose/scale/brightness-invariant). Graceful:
+    # if it errors it degrades to absent (must-not-block, R-OSIM-EFFORT). It is the one
+    # signal that stays meaningful for photo-vs-procedural where IoU/SSIM/edge collapse.
+    try:
+        objectness: float | None = objectness_similarity(reference_png, render_png)
+    except Exception:
+        objectness = None
 
     # HARD gates: a fail is an immediate reject with a specific numeric reason.
     hard_failures: list[str] = []
@@ -208,6 +220,8 @@ def evaluate(reference_png: Path, render_png: Path) -> dict[str, Any]:
         "flatRegion": (flat, 0.8),
         "tonalParity": (tonal, 1.0),
     }
+    if objectness is not None:
+        soft["objectness"] = (objectness, 1.5)  # strongest structural signal when present
     weighted = sum(s * w for s, w in soft.values())
     total_w = sum(w for _s, w in soft.values())
     fidelity = weighted / total_w if total_w else 0.0
@@ -224,6 +238,17 @@ def evaluate(reference_png: Path, render_png: Path) -> dict[str, Any]:
         verdict, action = "pass", "continue"
     else:
         verdict, action = "reject", "refine-code"
+
+    # Reconstruction-mode rescue: a *photo* reference vs a *procedural* render fails the
+    # silhouette-IoU hard gate purely from framing/background/scale mismatch. When the only
+    # hard failure is IoU AND objectness says "same object" (high, brightness/bg-invariant),
+    # downgrade the confident reject to a probe rather than hard-failing a faithful build.
+    # Never rescues a scale-delta failure or a genuinely different object (low objectness).
+    reconstruction_suspected = False
+    if hard_failures and objectness is not None and objectness >= RECON_OBJ_MIN:
+        if all("silhouette IoU" in f for f in hard_failures):
+            reconstruction_suspected = True
+            verdict, action = "low-confidence", "probe"
 
     return {
         "verdict": verdict,
@@ -243,7 +268,9 @@ def evaluate(reference_png: Path, render_png: Path) -> dict[str, Any]:
             "blowoutParity": round(blow, 4),
             "flatRegionScore": round(flat, 4),
             "tonalParity": round(tonal, 4),
+            "objectness": round(objectness, 4) if objectness is not None else None,
         },
+        "reconstructionModeSuspected": reconstruction_suspected,
         "weights": {k: w for k, (_s, w) in soft.items()},
         "reference": str(reference_png.resolve()),
         "render": str(render_png.resolve()),

@@ -101,12 +101,26 @@ class DivineEyeIntegrationTest(unittest.TestCase):
         self.assertEqual(r["action"], "refine-code")
         self.assertTrue(r["hardGateFailures"])
 
-    def test_shifted_shape_trips_iou_hard_gate(self):
-        # subject moved to a corner → low IoU → hard gate
+    def test_shifted_same_shape_is_rescued_by_objectness(self):
+        # subject moved to a corner → low IoU hard gate, BUT it is the same (square)
+        # shape → objectness (bg/pose/scale-invariant) recognises it → reconstruction-mode
+        # rescue downgrades the confident reject to a probe (still not a pass).
         ren = self.dir / "shifted.png"
         write_rgb_png(ren, 200, 200, block(0, 0, 60, 60))
         r = evaluate(self.ref, ren)
+        self.assertTrue(r["hardGateFailures"])          # IoU still trips
+        self.assertTrue(r["reconstructionModeSuspected"])
+        self.assertEqual(r["action"], "probe")          # rescued, NOT refine-code
+        self.assertNotEqual(r["verdict"], "pass")       # never auto-passes
+
+    def test_different_shape_iou_fail_is_not_rescued(self):
+        # a genuinely different shape (thin bar vs square) → low objectness → NO rescue,
+        # stays a hard reject. Guards the rescue from masking real geometric failures.
+        ren = self.dir / "wrongshape.png"
+        write_rgb_png(ren, 200, 200, block(10, 92, 190, 108))  # thin horizontal bar
+        r = evaluate(self.ref, ren)
         self.assertTrue(r["hardGateFailures"])
+        self.assertFalse(r["reconstructionModeSuspected"])
         self.assertEqual(r["action"], "refine-code")
 
     def test_asymmetric_subject_not_penalized_when_matched(self):

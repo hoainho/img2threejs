@@ -35,6 +35,7 @@ VALID_PRIMITIVES = {
     "tube",
     "lathe",
     "extrude",
+    "ground-blade",
     "curve-sweep",
     "plane-card",
     "instanced-cluster",

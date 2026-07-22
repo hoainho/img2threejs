@@ -24,6 +24,7 @@ VALID_PRIMITIVES = {
     "tube",
     "lathe",
     "extrude",
+    "ground-blade",
     "curve-sweep",
     "plane-card",
     "instanced-cluster",
@@ -229,6 +230,17 @@ class GeometryNotImplementedError(Exception):
 
 
 _DEFAULT_EXTRUDE_PROFILE = {"points": [[-0.3, -0.3], [0.3, -0.3], [0.3, 0.3], [-0.3, 0.3]], "depth": 0.1}
+# Plan 1.3 — ground blade: a real knife solid with a PRIMARY BEVEL (lower body grinds from
+# full thickness at a mid grind-line down to a sharp cutting edge) and a SWEDGE / false edge
+# (near the tip the spine also grinds to a false edge). Lofted from stations [x, spineY, edgeY].
+_DEFAULT_BLADE_SPEC = {
+    "stations": [
+        [0.00, 0.080, -0.090], [0.12, 0.086, -0.100], [0.30, 0.086, -0.110],
+        [0.50, 0.084, -0.108], [0.63, 0.078, -0.095], [0.74, 0.055, -0.055],
+        [0.82, 0.028, -0.020], [0.88, 0.000, 0.000],
+    ],
+    "thickness": 0.05, "grindFrac": 0.55, "swedgeFromTipFrac": 0.34, "spineFlat": 0.30,
+}
 _DEFAULT_LATHE_PROFILE = {"points": [[0.3, -0.5], [0.15, 0.0], [0.3, 0.5]], "segments": 24}
 _DEFAULT_TUBE_PATH = {"points": [[0.0, -0.5, 0.0], [0.0, 0.5, 0.0]], "radius": 0.05, "closed": False}
 # Plan 1.3 F.6 — curve-sweep: a thin 2D cross-section swept along a measured 3D spine.
@@ -254,13 +266,21 @@ def geometry_for(primitive: str, component: dict[str, Any] | None = None) -> str
     if primitive == "capsule":
         return "new THREE.CapsuleGeometry(0.35, 0.7, 16, 32)"
     if primitive == "torus":
-        return "new THREE.TorusGeometry(0.45, 0.08, 24, 96)"
+        # Tube thickness is ring-relative (fraction of the 0.45 base radius) so a
+        # component can be a slim bike tyre or a fat donut without changing scale.
+        desc = component.get("geometryDescriptor") if isinstance(component, dict) and isinstance(component.get("geometryDescriptor"), dict) else {}
+        tube_ratio = desc.get("torusTubeRatio")
+        tube = 0.45 * float(tube_ratio) if isinstance(tube_ratio, (int, float)) and tube_ratio > 0 else 0.08
+        return f"new THREE.TorusGeometry(0.45, {round(tube, 4)}, 24, 96)"
     if primitive == "plane-card":
         return "new THREE.PlaneGeometry(1, 1, 24, 24)"
     descriptor = component.get("geometryDescriptor") if isinstance(component, dict) and isinstance(component.get("geometryDescriptor"), dict) else {}
     if primitive == "extrude":
         profile = descriptor.get("profile2D") if isinstance(descriptor.get("profile2D"), dict) else _DEFAULT_EXTRUDE_PROFILE
         return f"buildExtrudeGeometry({json_literal(profile)})"
+    if primitive == "ground-blade":
+        spec = descriptor.get("bladeSpec") if isinstance(descriptor.get("bladeSpec"), dict) else _DEFAULT_BLADE_SPEC
+        return f"buildGroundBladeGeometry({json_literal(spec)})"
     if primitive == "lathe":
         profile = descriptor.get("latheProfile") if isinstance(descriptor.get("latheProfile"), dict) else _DEFAULT_LATHE_PROFILE
         return f"buildLatheGeometry({json_literal(profile)})"
@@ -346,6 +366,58 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
                 "    bevelEnabled: false,",
                 "    steps: 1,",
                 "  });",
+                "}",
+                "",
+            ]
+        )
+    if "ground-blade" in used_primitives:
+        lines.extend(
+            [
+                "// Ground blade: lofts a beveled cross-section along [x, spineY, edgeY] stations.",
+                "// Per station the section is: sharp cutting EDGE (z=0) → PRIMARY BEVEL up to the",
+                "// grind line (±T) → flat/saber body → SWEDGE near the tip (spine grinds to a false",
+                "// edge, z=0) or a squared spine elsewhere. Non-indexed → flat-shaded facets. UVs map",
+                "// the doppler gradient along length (u) and height (v).",
+                "function buildGroundBladeGeometry(spec: { stations: [number, number, number][]; thickness?: number; grindFrac?: number; swedgeFromTipFrac?: number }): THREE.BufferGeometry {",
+                "  const st = spec.stations;",
+                "  const T = (spec.thickness ?? 0.05) / 2;",
+                "  const grindFrac = spec.grindFrac ?? 0.55;",
+                "  const swedgeFrac = spec.swedgeFromTipFrac ?? 0.34;",
+                "  const xG = st[0][0];",
+                "  const xT = st[st.length - 1][0];",
+                "  const len = (xT - xG) || 1;",
+                "  const ring = (s: [number, number, number]): [number, number, number][] => {",
+                "    const [x, topY, botY] = s;",
+                "    const h = Math.max(1e-4, topY - botY);",
+                "    const grindY = botY + grindFrac * h;",
+                "    const swedgeY = topY - 0.42 * h;",
+                "    const sz = ((xT - x) / len < swedgeFrac) ? 0 : T;  // swedge → sharp false edge near tip",
+                "    return [",
+                "      [x, botY, 0], [x, grindY, T], [x, swedgeY, T], [x, topY, sz],",
+                "      [x, topY, -sz], [x, swedgeY, -T], [x, grindY, -T],",
+                "    ];",
+                "  };",
+                "  const pos: number[] = [];",
+                "  const tri = (a: number[], b: number[], c: number[]) => { pos.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]); };",
+                "  let A = ring(st[0]);",
+                "  // guard-end cap (fan) so the base is closed where it meets the guard",
+                "  for (let k = 1; k < 6; k++) tri(A[0], A[k], A[k + 1]);",
+                "  for (let i = 1; i < st.length; i++) {",
+                "    const B = ring(st[i]);",
+                "    for (let k = 0; k < 7; k++) {",
+                "      const k2 = (k + 1) % 7;",
+                "      tri(A[k], A[k2], B[k2]);",
+                "      tri(A[k], B[k2], B[k]);",
+                "    }",
+                "    A = B;",
+                "  }",
+                "  const g = new THREE.BufferGeometry();",
+                "  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));",
+                "  g.computeVertexNormals();",
+                "  const uv: number[] = [];",
+                "  for (let t = 0; t < pos.length; t += 3) uv.push((pos[t] - xG) / len, (pos[t + 1] + 0.12) / 0.24);",
+                "  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));",
+                "  return g;",
                 "}",
                 "",
             ]
@@ -1016,6 +1088,63 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
                 ]
             )
 
+    # Repetition systems (spokes, fasteners, teeth, slats): the spec models these
+    # as a count + placement + instanceScale rather than N hand-authored components.
+    # They are emitted here, parented to the referenced node, and pass-gated by the
+    # same macro/meso/micro levels as componentTree so blockout stays clay-macro.
+    allowed_levels = PASS_LEVELS.get(pass_id, {"macro"})
+    known_ids = {str(c.get("id")) for c in all_components if isinstance(c, dict)}
+    for rep_index, system in enumerate(spec.get("repetitionSystems", [])):
+        if not isinstance(system, dict):
+            continue
+        level = str(system.get("level") or "meso")
+        if level not in allowed_levels:
+            continue
+        parent_id = str(system.get("parent") or "root")
+        if parent_id not in known_ids and parent_id != "root":
+            parent_id = "root"
+        placement = system.get("placement", {}) if isinstance(system.get("placement"), dict) else {}
+        count = int(system.get("count") or 0)
+        if count <= 0:
+            continue
+        primitive = str(system.get("primitive") or "box")
+        if primitive not in VALID_PRIMITIVES:
+            primitive = "box"
+        rep_material = str(system.get("material") or next(iter(materials.keys()), "base"))
+        scale = system.get("instanceScale", [0.1, 0.1, 0.1])
+        axis = placement.get("axis", [0, 0, 1])
+        radius = placement.get("radius", 0.0)
+        start_deg = placement.get("startAngleDeg", 0)
+        mode = str(placement.get("mode") or "radial")
+        rep_var = f"rep_{rep_index}"
+        lines.extend(
+            [
+                "",
+                f"  // repetition system: {system.get('id') or rep_var} ({mode}, count={count}, level={level})",
+                "  {",
+                f"    const parent = nodes[{json.dumps(parent_id)}] ?? root;",
+                f"    const geo = {geometry_for(primitive, {})};",
+                f"    const mat = materialMap[{json.dumps(rep_material)}] ?? new THREE.MeshStandardMaterial({{ color: 0x888888 }});",
+                f"    const scl = [{vector(scale, [0.1, 0.1, 0.1])}];",
+                f"    const axis = new THREE.Vector3({vector(axis, [0, 0, 1])}).normalize();",
+                f"    const radius = {float(radius) if isinstance(radius, (int, float)) else 0.0};",
+                "    const seed = Math.abs(axis.z) < 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0);",
+                "    const perp = new THREE.Vector3().crossVectors(axis, seed).normalize();",
+                f"    for (let i = 0; i < {count}; i++) {{",
+                f"      const ang = (({float(start_deg) if isinstance(start_deg,(int,float)) else 0.0}) + (i * 360) / {count}) * Math.PI / 180;",
+                "      const dir = perp.clone().applyQuaternion(new THREE.Quaternion().setFromAxisAngle(axis, ang));",
+                "      const inst = new THREE.Mesh(geo, mat);",
+                "      inst.scale.set(scl[0], scl[1], scl[2]);",
+                "      if (radius > 0) inst.position.copy(dir.clone().multiplyScalar(radius * 0.5));",
+                "      inst.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), dir));",
+                "      inst.castShadow = options.castShadow ?? true;",
+                "      inst.receiveShadow = options.receiveShadow ?? true;",
+                "      parent.add(inst);",
+                "    }",
+                "  }",
+            ]
+        )
+
     look_dev_targets = spec.get("lookDevTargets", {})
     lighting_from_photo = spec.get("lightingFromPhoto", [])
     lines.extend(
@@ -1051,6 +1180,15 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
             "  key.shadow.mapSize.set(4096, 4096);",
             "  key.shadow.bias = -0.00025;",
             "  key.shadow.normalBias = 0.018;",
+            "  key.shadow.radius = 7;",
+            "  key.shadow.blurSamples = 24;",
+            "  key.shadow.camera.near = 0.5;",
+            "  key.shadow.camera.far = 30;",
+            "  key.shadow.camera.left = -2.6;",
+            "  key.shadow.camera.right = 2.6;",
+            "  key.shadow.camera.top = 2.6;",
+            "  key.shadow.camera.bottom = -2.6;",
+            "  key.shadow.camera.updateProjectionMatrix();",
             "  lights.add(key);",
             "  const fill = new THREE.DirectionalLight(0xa8c4ff, mode === 'grazing' ? 0.12 : 0.42);",
             "  fill.position.set(4.0, 3.0, 3.5);",

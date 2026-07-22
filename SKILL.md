@@ -2,7 +2,7 @@
 name: img2threejs
 description: Turn an object or character reference image into a quality-gated, animation-ready procedural Three.js model built in code. Use for image-to-3D reconstruction, detail-accurate object rebuilds, stylized/likeness-maximized human characters, sculpt specs, and staged code generation.
 license: MIT
-version: 1.2.0
+version: 1.3.0
 ---
 
 # img2threejs — Image to procedural Three.js
@@ -69,8 +69,17 @@ Full flags: `grimoire/scripts.md`. Never let a script *score* visuals — that i
    (`grimoire/glossary/3d_vocabulary.md`), never "nice/smooth/shiny". Classify every component's
    `topologyClass`/`topologyRationale` per `grimoire/intake/surface_topology.md` before picking a
    `primitive` — this is what prevents a continuous organic form from being picked as a box.
-4. When material fidelity matters and a source image exists, extract reference PBR evidence per crop:
-   `forge/stage1_intake/extract_pbr_evidence.py <crop> --out-dir <dir> --material-id <id> --target-threshold 0.7`.
+4. When material fidelity matters and a source image exists, analyze each material's **finish** then
+   extract reference PBR evidence, both per crop (crop the correct region — verify the crop is on the
+   part you think it is):
+   - `forge/stage1_intake/analyze_texture.py <crop> --spec spec.json --material-id <id> --in-place`
+     classifies the finish (`gem-metal | gemstone | painted-metal | worn-composite | brushed-steel |
+     plastic`), extracts the gradient palette, and writes doc-grounded MeshPhysicalMaterial scalars
+     (metalness/roughness/clearcoat/transmission/ior/anisotropy/envMapIntensity) onto the material.
+     Recipes + Three.js texture/PBR rules (colorSpace, CanvasTexture/DataTexture, height→normal) live
+     in `grimoire/build/threejs_texture_reference.md`. Rule of thumb: **solid albedo for flat paint,
+     real reference crop for patterned finishes** (doppler/quartz/hydro-dip/camo).
+   - `forge/stage1_intake/extract_pbr_evidence.py <crop> --out-dir <dir> --material-id <id> --target-threshold 0.7`.
    Confidence < 0.7 is a stop/refine-input signal, not a pass. It is inference, not inverse rendering.
 5. Validate, then strict-validate before generating code:
    `forge/stage2_spec/validate_sculpt_spec.py object-sculpt-spec.json` then `--strict-quality`.

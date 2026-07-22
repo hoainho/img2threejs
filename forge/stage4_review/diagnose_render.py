@@ -31,7 +31,26 @@ from extract_pbr_evidence import build_foreground_mask, load_image  # noqa: E402
 from extract_part_color_recipe import lab_distance, lab_kmeans_palette, srgb_to_lab  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "stage3_build"))
-from orchestrate_passes import load_spec  # noqa: E402
+from orchestrate_passes import DEFAULT_PASS_ORDER, load_spec  # noqa: E402
+
+
+def color_is_gated(pass_id: str | None) -> bool:
+    """Per-part color fidelity is a hard criterion only from `material-pass` onward.
+
+    Blockout / structural / form-refinement passes render the model with clay
+    (materials deliberately stripped) so the silhouette can be judged on shape
+    alone — comparing their per-part color against a colored reference always
+    fails and says nothing about those passes' goals. Before material-pass (or
+    when the pass is unknown) the color delta is recorded as informational, never
+    a failure. This mirrors the skill doctrine: "blockout: silhouette reads
+    correctly WITHOUT materials".
+    """
+    if pass_id is None:
+        return False
+    try:
+        return DEFAULT_PASS_ORDER.index(pass_id) >= DEFAULT_PASS_ORDER.index("material-pass")
+    except ValueError:
+        return False
 
 
 SILHOUETTE_IOU_THRESHOLD = 0.85
@@ -179,8 +198,10 @@ def run_tier1(
             if isinstance(component, dict) and isinstance(component.get("colorMaterialRecipe"), dict)
         ]
         color_report = per_part_color_delta(recipes, render_path)
+        gated = color_is_gated(pass_id)
+        color_report["gated"] = gated
         checks["colorDelta"] = color_report
-        if color_report["maxDeltaE"] > COLOR_DELTA_E_THRESHOLD:
+        if gated and color_report["maxDeltaE"] > COLOR_DELTA_E_THRESHOLD:
             failures.append(
                 f"max per-part color delta-E {color_report['maxDeltaE']} exceeds "
                 f"threshold {COLOR_DELTA_E_THRESHOLD}"
