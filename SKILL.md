@@ -44,7 +44,12 @@ hidden sides or guarantee exact geometry — say so instead of faking confidence
 Run scripts from the skill root (`forge/...`). Pure Python 3.10+ stdlib, no pip installs.
 Full flags: `grimoire/scripts.md`. Never let a script *score* visuals — that is the agent's job.
 
-1. Probe local images: `forge/stage1_intake/probe_image.py <image>` (metadata only, not a visual check).
+1. **Analyze the image first** (agent vision, before any script): work the layered observation
+   protocol in `grimoire/intake/image_analysis.md` — identify/classify, decompose macro→meso→micro,
+   map part relationships, name materials in PBR terms, list identity-defining features, and flag
+   what the single view hides. Observation before inference; controlled 3D vocabulary; 3D
+   object-space not 2D image-space. This is generic for any subject and feeds every field below.
+   Then probe local images: `forge/stage1_intake/probe_image.py <image>` (metadata only, not a visual check).
 2. **Pre-Spec Assessment Gate** — classify + score complexity + write the quality contract:
    `forge/stage2_spec/new_pre_spec_assessment.py "Name" --image <img> --complexity <simple|moderate|complex|ultra-complex> --out assessment.json`. Rules: `grimoire/intake/quality_contract.md`.
    Set `objectClass.primaryDomain` (`object` | `character` | `hybrid`) and fill the seeded
