@@ -746,7 +746,8 @@ def apply_cs2_template(
                          "environment": "code-generated-default (RoomEnvironment->PMREM); user HDRI optional",
                          "environmentAvailable": environment_available,
                          "tier": "image-first"}
-    # fill the assessment/contract so strict-quality passes without a separate assessment file
+    # fill the assessment/contract so a normal validate passes; CS2 is held to the ultra-complex
+    # bar, so strict-quality still requires the agent to enumerate the CS2 detail inventory first.
     pre = spec.setdefault("preSpecAssessment", {})
     if conflicts:
         unknowns = pre.setdefault("unknownsToResolveBeforeImplementation", [])
@@ -760,16 +761,22 @@ def apply_cs2_template(
     oc["materialFamilies"] = ["metal", "anodized-coat" if profile["viewDependent"] else "painted-coat"]
     oc["cs2"] = True
     complexity = pre.setdefault("complexity", {})
-    complexity["tier"] = "moderate"
+    complexity["tier"] = "ultra-complex"
     decision = pre.setdefault("specDepthDecision", {})
-    decision["requiredDepth"] = "moderate"
+    decision["requiredDepth"] = "ultra-complex"
+    decision["needsRepetitionSystems"] = True
+    decision["needsMaterialLocalOverrides"] = True
+    decision["minimumComponentLevels"] = ["macro", "meso", "micro"]
     inv = pre.setdefault("detailInventory", {})
-    inv["targetMinDetails"] = 0  # image-first: finish described by finishStyle + materials, not a detail count
+    # CS2 skins are treated as ultra-complex: the finish/wear/hardware IS the item, so the detail
+    # gate demands the ultra count (16). strict-quality then blocks code-gen until the agent
+    # enumerates the identity-defining details -- it does not pass on the bare seed.
+    inv["targetMinDetails"] = 16
     contract = spec.setdefault("qualityContract", {})
-    contract["qualityBar"] = "moderate"
+    contract["qualityBar"] = "ultra-complex"
     contract.setdefault("minimumSpecDepth", {}).update(
-        {"macroComponents": 2, "mesoComponents": 3, "microFeatureGroups": 2,
-         "materialLayers": 2, "repetitionSystems": 0, "reviewViewpoints": 3}
+        {"macroComponents": 5, "mesoComponents": 16, "microFeatureGroups": 8,
+         "materialLayers": 4, "repetitionSystems": 2, "reviewViewpoints": 5}
     )
     return spec
 

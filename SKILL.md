@@ -49,8 +49,9 @@ Full flags: `grimoire/scripts.md`. Never let a script *score* visuals — that i
    `forge/stage2_spec/new_pre_spec_assessment.py "Name" --image <img> --complexity <simple|moderate|complex|ultra-complex> --out assessment.json`. Rules: `grimoire/intake/quality_contract.md`.
    Set `objectClass.primaryDomain` (`object` | `character` | `hybrid`) and fill the seeded
    `detailInventory` (its `targetMinDetails` scales with complexity). **CS2 weapon/knife/glove
-   skins**: always pass `--cs2`, which floors `targetMinDetails` at 9 regardless of complexity
-   tier — no exception, a CS2 skin's finish/wear/hardware detail never justifies fewer than 9.
+   skins**: always pass `--cs2`, which defaults the complexity tier to `ultra-complex`
+   (`targetMinDetails` 16) — the finish/wear/hardware is the item, so CS2 is held to the top
+   fidelity bar; `targetMinDetails` never drops below the 9 floor even if downgraded by hand.
    CS2 finish/float/paint-seed/environment rulebook: `grimoire/build/cs2_finishes.md`; optional
    exact-texture acquisition: `grimoire/intake/cs2_texture_acquisition.md`.
 2b. **Detail inventory** (do not skip for detailed subjects) — scan zones and enumerate every

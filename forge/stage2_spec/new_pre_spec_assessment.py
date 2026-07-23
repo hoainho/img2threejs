@@ -56,8 +56,8 @@ DETAIL_MINIMUMS = {
 
 # CS2 weapon/knife/glove skins always carry more identity-defining detail (finish pattern,
 # wear layer, hardware, stitching/fasteners) than a generic object at the same structural
-# complexity tier -- so the detail-count floor never drops below this, no exception, even
-# for a structurally "simple"/"moderate" item.
+# complexity tier -- so --cs2 defaults to the ultra-complex tier (targetMinDetails 16), and the
+# detail-count floor never drops below this even if --complexity is explicitly set lower.
 CS2_DETAIL_MINIMUM = 9
 
 # Lightweight keyword heuristic, not exhaustive: catches the common phrasing ("CS2 skin",
@@ -116,19 +116,23 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--complexity",
         choices=sorted(COMPLEXITY_MINIMUMS),
-        default="moderate",
-        help="Initial complexity estimate. Refine after visual inspection.",
+        default=None,
+        help="Initial complexity estimate. Refine after visual inspection. "
+             "Default: ultra-complex for CS2 skins, moderate otherwise.",
     )
     parser.add_argument("--out", type=Path, help="Output JSON path")
     parser.add_argument("--force", action="store_true", help="Overwrite output file")
     parser.add_argument(
         "--cs2",
         action="store_true",
-        help=f"CS2 weapon/knife/glove skin -- floors targetMinDetails at {CS2_DETAIL_MINIMUM} regardless of complexity tier.",
+        help=f"CS2 weapon/knife/glove skin -- defaults complexity to ultra-complex (targetMinDetails 16); "
+             f"never below the {CS2_DETAIL_MINIMUM} floor even if --complexity is set lower.",
     )
     args = parser.parse_args(argv)
 
-    payload = json.dumps(make_payload(args.target_name, args.image, args.complexity, args.cs2), indent=2, ensure_ascii=False) + "\n"
+    is_cs2 = args.cs2 or detect_cs2_intent(args.target_name)
+    complexity = args.complexity or ("ultra-complex" if is_cs2 else "moderate")
+    payload = json.dumps(make_payload(args.target_name, args.image, complexity, args.cs2), indent=2, ensure_ascii=False) + "\n"
     if args.out:
         output = args.out.expanduser().resolve()
         if output.exists() and not args.force:

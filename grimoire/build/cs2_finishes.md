@@ -87,11 +87,13 @@ only** when a `needsEnvironment` material would render with no environment at al
 code-generated default always exists otherwise, this is a last-resort guard, **not** the common
 path: the flagship image-only Doppler case passes normally.
 
-## Detail floor
+## Complexity tier & detail floor
 
 A CS2 weapon/knife/glove skin always carries more identity-defining detail than a generic object
-at the same structural tier, so `--cs2` floors `targetMinDetails` at **9** regardless of
-complexity tier (see `grimoire/intake/quality_contract.md`).
+at the same structural tier, so `--cs2` **defaults the complexity tier to `ultra-complex`**
+(`targetMinDetails` 16) — the CS2 track is held to the top fidelity bar regardless of how simple
+the bare geometry looks. If `--complexity` is set lower by hand, the detail-count floor still
+never drops below **9** (see `grimoire/intake/quality_contract.md`).
 
 ## Honest ceiling
 
