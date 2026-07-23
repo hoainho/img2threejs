@@ -407,7 +407,7 @@ class PipelineTest(unittest.TestCase):
         self.assertNotIn("function buildCurveSweepGeometry", out.read_text())
 
     def test_ground_blade_uv_uses_actual_y_bounds(self):
-        # US-7: ground-blade UVs must map v across the blade's ACTUAL Y bounds, not a hardcoded
+        # ground-blade UVs must map v across the blade's ACTUAL Y bounds, not a hardcoded
         # ±0.12. An off-origin blade (y~0.4) with the old formula clamped v→1 so every face sampled
         # the bright spine-rim row → white/washed tip facets. Corrected UV = (y - yMin) / yH.
         run("stage2_spec/new_sculpt_spec.py", "Blade", "--out", self.spec)
@@ -430,7 +430,7 @@ class PipelineTest(unittest.TestCase):
         self.assertNotIn("+ 0.12) / 0.24", ts)             # old hardcoded formula gone
 
     def test_extrude_supports_oval_hole_via_shape_holes(self):
-        # US-8: a cutout (wire-cutter oval hole) is done via THREE.Shape.holes — dep-free, no
+        # a cutout (wire-cutter oval hole) is done via THREE.Shape.holes — dep-free, no
         # three-bvh-csg. The generator must emit hole-handling + oval-loop support on extrude.
         run("stage2_spec/new_sculpt_spec.py", "Blade", "--out", self.spec)
         spec = json.loads(self.spec.read_text())
