@@ -27,6 +27,10 @@ from extract_pbr_evidence import build_foreground_mask, load_image  # noqa: E402
 # MeshPhysicalMaterial scalar presets per finish (see grimoire threejs_texture_reference.md)
 RECIPES: dict[str, dict[str, Any]] = {
     "gem-metal":      {"metalness": 0.75, "roughness": 0.14, "clearcoat": 0.60, "clearcoatRoughness": 0.06, "transmission": 0.0, "ior": 1.5,  "envMapIntensity": 1.3, "anisotropy": 0.0, "procedural": "gradient-smoke"},
+    # candy-coat: anodized / PVD / pigment-dominant doppler coat. Dielectric-led (low metalness) +
+    # clearcoat + trimmed envMapIntensity so the environment reflection can't steal the hue — the
+    # exact counter-recipe that fixed the M9 Doppler blue-wash (grimoire/feedback/shading_realism.md).
+    "candy-coat":     {"metalness": 0.35, "roughness": 0.18, "clearcoat": 0.60, "clearcoatRoughness": 0.15, "transmission": 0.0, "ior": 1.5,  "envMapIntensity": 0.7, "anisotropy": 0.0, "procedural": "gradient-smoke"},
     "gemstone":       {"metalness": 0.0,  "roughness": 0.05, "clearcoat": 1.00, "clearcoatRoughness": 0.0,  "transmission": 0.9, "ior": 1.54, "envMapIntensity": 1.0, "anisotropy": 0.0, "procedural": "gradient-smoke"},
     "painted-metal":  {"metalness": 0.0,  "roughness": 0.5,  "clearcoat": 1.00, "clearcoatRoughness": 0.05, "transmission": 0.0, "ior": 1.5,  "envMapIntensity": 1.0, "anisotropy": 0.0, "procedural": "flat-clearcoat"},
     "worn-composite": {"metalness": 0.0,  "roughness": 0.9,  "clearcoat": 0.0,  "clearcoatRoughness": 0.0,  "transmission": 0.0, "ior": 1.5,  "envMapIntensity": 0.5, "anisotropy": 0.0, "procedural": "mottle"},
@@ -124,10 +128,20 @@ def analyze(path: str | Path) -> dict[str, Any]:
         else:                                        # mid-bright smooth neutral = plastic
             finish = "plastic"
     else:  # chromatic
-        # gem/doppler = a chromatic surface with a strong gradient AND smoky internal variance
-        # (the swirl); flat paint has the gradient from lighting only, so low internal mottle.
+        # gem/candy/doppler family = a chromatic surface with a strong gradient AND smoky internal
+        # variance (the swirl); flat paint has the gradient from lighting only, so low mottle.
         if gradient_strength > 0.18 and mottle > 0.038:
-            finish = "gem-metal" if (spec_frac > 0.005 or mean_lum < 140) else "gemstone"
+            if spec_frac > 0.05:
+                # bright chrome-like specular hotspots → genuinely metallic doppler (high metalness)
+                finish = "gem-metal"
+            elif mean_lum > 150 and spec_frac < 0.005:
+                # bright + clean, no specular blowout → transmissive gemstone (quartz/glass)
+                finish = "gemstone"
+            else:
+                # saturated PIGMENT-DOMINANT coat (colour survives into mid-tones, little chrome)
+                # → anodized/PVD/doppler candy-coat, rendered as a dielectric so the env can't
+                # steal the hue. This is the M9-Doppler case (was mis-classed high-metalness).
+                finish = "candy-coat"
         else:
             finish = "painted-metal"
 
@@ -144,11 +158,28 @@ def analyze(path: str | Path) -> dict[str, Any]:
         b = sum(c[2] for c in col) // len(col)
         stops.append(f"#{r:02X}{gg:02X}{b:02X}")
 
+    # Hue-survival annotation: flag any saturated blue-leaning violet/blue
+    # palette stop (B > R) that would collapse to flat blue under ACES/Reinhard tone-mapping, and
+    # suggest a magenta-lean correction (R >= B + a little green). Same rule as extract_gradient_stops.
+    palette_risk = []
+    for hexs in stops:
+        r_ = int(hexs[1:3], 16)
+        g_ = int(hexs[3:5], 16)
+        b_ = int(hexs[5:7], 16)
+        hh, ss, _vv = colorsys.rgb_to_hsv(r_ / 255, g_ / 255, b_ / 255)
+        if b_ > r_ and ss > 0.15 and 0.54 <= hh <= 0.83:  # violet/blue hue band on the HSV circle
+            palette_risk.append({
+                "stop": hexs,
+                "hueRisk": "blue-collapse",
+                "suggestedRgb": [min(255, b_), max(g_, int(b_ * 0.25)), r_],
+            })
+
     recipe = dict(RECIPES[finish])
     return {
         "finishClass": finish,
         "recipe": recipe,
         "palette": stops,
+        "paletteHueRisk": palette_risk,
         "gradientAxis": gradient_axis,
         "stats": {
             "meanLum": round(mean_lum, 1),

@@ -41,15 +41,34 @@ class AnalyzeTextureTest(unittest.TestCase):
         write_png(p, self.S, self.S, fn)
         return p
 
-    def test_chromatic_gradient_is_gem_metal(self):
-        # doppler-like: blue->purple gradient across X WITH smoky internal mottle -> gem-metal
+    def test_pigment_dominant_doppler_is_candy_coat(self):
+        # doppler-like blue->purple gradient + smoky mottle, NO chrome specular (colour survives
+        # into mid-tones) -> candy-coat (dielectric). This is the M9-Doppler case that previously
+        # mis-classed as high-metalness gem-metal and rendered blue (env stole the hue).
         def fn(x, y):
             noise = ((x * 5 + y * 9) % 23) - 11  # smoke variance
             return (cl(20 + x * 1.2 + noise), cl(25 + noise), cl(130 + noise))
+        r = analyze(self._mk("candy.png", fn))
+        self.assertEqual(r["finishClass"], "candy-coat")
+        self.assertEqual(r["recipe"]["procedural"], "gradient-smoke")
+        self.assertLessEqual(r["recipe"]["metalness"], 0.4)   # dielectric-led → hue survives
+        self.assertLessEqual(r["recipe"]["envMapIntensity"], 0.9)
+        self.assertEqual(len(r["palette"]), 5)
+        # blue-leaning stops (B > R) flagged for hue-survival with a magenta-lean suggestion
+        self.assertTrue(r["paletteHueRisk"], "expected blue-collapse flag on blue-leaning stops")
+        self.assertEqual(r["paletteHueRisk"][0]["hueRisk"], "blue-collapse")
+
+    def test_chrome_specular_doppler_is_gem_metal(self):
+        # same chromatic gradient but WITH bright chrome specular hotspots -> genuinely metallic
+        # doppler (gem-metal, high metalness). Bright hotspots on ~6% of pixels (lum > 235).
+        def fn(x, y):
+            noise = ((x * 5 + y * 9) % 23) - 11
+            if (x + y) % 17 == 0:
+                return (250, 250, 255)  # chrome specular hotspot
+            return (cl(20 + x * 1.2 + noise), cl(25 + noise), cl(130 + noise))
         r = analyze(self._mk("gem.png", fn))
         self.assertEqual(r["finishClass"], "gem-metal")
-        self.assertEqual(r["recipe"]["procedural"], "gradient-smoke")
-        self.assertEqual(len(r["palette"]), 5)
+        self.assertGreaterEqual(r["recipe"]["metalness"], 0.6)
 
     def test_flat_saturated_is_painted_metal(self):
         img = self._mk("paint.png", lambda x, y: (230, 150, 50))

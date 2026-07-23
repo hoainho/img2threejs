@@ -46,11 +46,12 @@ from diagnose_render import (  # noqa: E402
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "stage1_intake"))
-from extract_pbr_evidence import load_image  # noqa: E402
+from extract_pbr_evidence import build_foreground_mask, load_image  # noqa: E402
 
 from objectness import objectness_similarity  # noqa: E402  (stdlib OSIM-lite, same dir)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "_shared"))
+from color_metrics import ciede2000, srgb_to_lab  # noqa: E402
 from image_hash import normalized_similarity, phash_from_image  # noqa: E402
 
 # Hard-gate thresholds (shared with diagnose_render; calibratable in Phase 5).
@@ -64,6 +65,115 @@ RECON_OBJ_MIN = 0.48        # objectness ≥ this rescues an IoU-only hard rejec
 #                            genuinely different shape (~0.43). Rescue only ever downgrades reject→probe.
 LUMA_SIZE = 64   # SSIM / tonal / blowout / flat work on this downsampled luma grid
 EDGE_SIZE = 96   # edge overlap grid
+HUE_ZONE_DELTA_E = 2.3   # per-band CIEDE2000 "same hue zone" tolerance (Context Part 2.2)
+HUE_ZONE_BANDS = 8       # bands sampled along the axis for hue_zone_parity
+COLOR_SAMPLE = 160       # coarse per-axis subsample cap for colour helpers (perf on full-res refs)
+
+
+def _banded_median_lab(png_path: Path, axis: str, bands: int) -> list[tuple[float, float, float] | None]:
+    """Median CIELAB per foreground-masked band along the axis (axis 'u'=x, 'v'=y).
+    Colour-aware (not luma) — used only by hue_zone_parity, which is report-only until calibrated."""
+    width, height, pixels, _ = load_image(png_path)
+    mask, _meta, _warn = build_foreground_mask(width, height, pixels)
+    span = width if axis == "u" else height
+    band = max(1, span // bands)
+    # Subsample on a coarse grid (≤ COLOR_SAMPLE px/axis) so full-res references stay O(fast) —
+    # median hue is stable under downsampling (Context Part 2.5 perf note).
+    sx = max(1, width // COLOR_SAMPLE)
+    sy = max(1, height // COLOR_SAMPLE)
+    out: list[tuple[float, float, float] | None] = []
+    for b in range(bands):
+        lo = b * band
+        hi = span if b == bands - 1 else (b + 1) * band
+        rs: list[int] = []
+        gs: list[int] = []
+        bs: list[int] = []
+        for y in range(0, height, sy):
+            for x in range(0, width, sx):
+                coord = x if axis == "u" else y
+                if coord < lo or coord >= hi:
+                    continue
+                idx = y * width + x
+                if idx >= len(mask) or not mask[idx]:
+                    continue
+                r, g, bl, _a = pixels[idx]
+                rs.append(r)
+                gs.append(g)
+                bs.append(bl)
+        if not rs:
+            out.append(None)
+            continue
+        rs.sort(); gs.sort(); bs.sort()
+        m = len(rs) // 2
+        out.append(srgb_to_lab((rs[m], gs[m], bs[m])))
+    return out
+
+
+def _foreground_hsv_stats(png_path: Path) -> tuple[float, float]:
+    """Saturation-weighted mean (hueDeg, saturation) over the foreground. Colour-aware."""
+    import colorsys
+    import math as _m
+    width, height, pixels, _ = load_image(png_path)
+    mask, _meta, _warn = build_foreground_mask(width, height, pixels)
+    sx = max(1, width // COLOR_SAMPLE)
+    sy = max(1, height // COLOR_SAMPLE)
+    sc = ss = wsum = sat_sum = 0.0
+    n = 0
+    for y in range(0, height, sy):
+        for x in range(0, width, sx):
+            idx = y * width + x
+            if idx >= len(mask) or not mask[idx]:
+                continue
+            r, g, b, _a = pixels[idx]
+            h, s, _v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+            sat_sum += s
+            n += 1
+            if s > 0.15:
+                sc += s * _m.cos(2 * _m.pi * h)
+                ss += s * _m.sin(2 * _m.pi * h)
+                wsum += s
+    mean_sat = sat_sum / n if n else 0.0
+    mean_hue = (_m.degrees(_m.atan2(ss, sc)) % 360.0) if wsum > 0 else 0.0
+    return mean_hue, mean_sat
+
+
+def specular_wash(reference_png: Path, render_png: Path) -> dict[str, Any]:
+    """Detect the envMap/metalness 'hue theft': the render desaturates a saturated reference AND
+    drifts its hue toward cyan (~180°). Report-only — advisory, never a gate (lighting legitimately
+    shifts hue). Returns {satRatio, hueDriftDeg, towardCyan, flagged}. (Context Part 3.2)."""
+    ref_hue, ref_sat = _foreground_hsv_stats(reference_png)
+    ren_hue, ren_sat = _foreground_hsv_stats(render_png)
+    sat_ratio = (ren_sat / ref_sat) if ref_sat > 1e-6 else 1.0
+    # circular hue drift toward cyan (180°): did the render move closer to 180 than the reference?
+    ref_to_cyan = min(abs(ref_hue - 180.0), 360.0 - abs(ref_hue - 180.0))
+    ren_to_cyan = min(abs(ren_hue - 180.0), 360.0 - abs(ren_hue - 180.0))
+    toward_cyan = ren_to_cyan < ref_to_cyan
+    flagged = ref_sat > 0.35 and sat_ratio < 0.6 and toward_cyan
+    return {
+        "satRatio": round(sat_ratio, 3),
+        "hueDriftDeg": round(ref_to_cyan - ren_to_cyan, 1),
+        "towardCyan": toward_cyan,
+        "flagged": flagged,
+        "advice": "lower metalness / envMapIntensity (candy-coat dielectric recipe)" if flagged else None,
+    }
+
+
+def hue_zone_parity(reference_png: Path, render_png: Path, axis: str = "u",
+                    bands: int = HUE_ZONE_BANDS) -> float:
+    """Fraction of along-axis bands whose median colour matches the reference within CIEDE2000
+    ≤ HUE_ZONE_DELTA_E. Catches "purple rendered blue" that luma/structure signals miss.
+    Report-only (no ensemble weight) until calibrated on the labeled corpus (US-6)."""
+    ref = _banded_median_lab(reference_png, axis, bands)
+    ren = _banded_median_lab(render_png, axis, bands)
+    matched = 0
+    counted = 0
+    for a, b in zip(ref, ren):
+        if a is None or b is None:
+            continue
+        counted += 1
+        if ciede2000(a, b) <= HUE_ZONE_DELTA_E:
+            matched += 1
+    return matched / counted if counted else 0.0
 
 
 def load_luma(png_path: Path, size: int) -> list[float]:
@@ -200,6 +310,18 @@ def evaluate(reference_png: Path, render_png: Path) -> dict[str, Any]:
     except Exception:
         objectness = None
 
+    # hue_zone_parity: colour-aware along-axis hue match (CIEDE2000). REPORT-ONLY — not in the
+    # weighted ensemble until calibrated on the labeled corpus (US-6). Catches "purple→blue" that
+    # every luma/structure signal above is blind to. Graceful: degrades to None on error.
+    try:
+        hue_zone: float | None = hue_zone_parity(reference_png, render_png)
+    except Exception:
+        hue_zone = None
+    try:
+        spec_wash: dict[str, Any] | None = specular_wash(reference_png, render_png)
+    except Exception:
+        spec_wash = None
+
     # HARD gates: a fail is an immediate reject with a specific numeric reason.
     hard_failures: list[str] = []
     if iou < IOU_HARD_MIN:
@@ -269,12 +391,17 @@ def evaluate(reference_png: Path, render_png: Path) -> dict[str, Any]:
             "flatRegionScore": round(flat, 4),
             "tonalParity": round(tonal, 4),
             "objectness": round(objectness, 4) if objectness is not None else None,
+            "hueZoneParity": round(hue_zone, 4) if hue_zone is not None else None,
         },
+        "specularWash": spec_wash,
+        "reportOnlySignals": ["hueZoneParity", "specularWash"],
         "reconstructionModeSuspected": reconstruction_suspected,
         "weights": {k: w for k, (_s, w) in soft.items()},
         "reference": str(reference_png.resolve()),
         "render": str(render_png.resolve()),
-        "note": "deterministic ensemble; zero VLM/token. VLM layer (§3.4) runs only if this passes.",
+        "note": "deterministic ensemble; zero VLM/token. hueZoneParity is REPORT-ONLY (colour-aware, "
+                "CIEDE2000) — not yet in the weighted fidelity; promote after corpus calibration (US-6). "
+                "VLM layer (§3.4) runs only if this passes.",
     }
 
 

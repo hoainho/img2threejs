@@ -290,6 +290,14 @@ def geometry_for(primitive: str, component: dict[str, Any] | None = None) -> str
     if primitive == "curve-sweep":
         sweep = descriptor.get("curveSweep") if isinstance(descriptor.get("curveSweep"), dict) else _DEFAULT_CURVE_SWEEP
         return f"buildCurveSweepGeometry({json_literal(sweep)})"
+    if primitive == "instanced-cluster":
+        # An instanced cluster's *geometry* is its base shape; the instancing itself is applied
+        # by the repetition-system emitter (THREE.InstancedMesh). Resolve the base primitive from
+        # the descriptor (default box); guard against self-reference so we never recurse.
+        base = descriptor.get("baseGeometry") if isinstance(descriptor.get("baseGeometry"), str) else "box"
+        if base in ("instanced-cluster", "") or base not in VALID_PRIMITIVES:
+            base = "box"
+        return geometry_for(base, component)
     raise GeometryNotImplementedError(primitive)
 
 
@@ -348,7 +356,7 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
                 "// corner — sharp/pointed profiles (blades, fork tines, spikes) need",
                 "// bevelEnabled: false plus lineTo()-only path segments near the tip, since a",
                 "// curve command cannot produce a true converging point.",
-                "function buildExtrudeShape(points: [number, number][]): THREE.Shape {",
+                "function buildExtrudeShape(points: [number, number][], holes?: [number, number][][]): THREE.Shape {",
                 "  const shape = new THREE.Shape();",
                 "  if (points.length > 0) {",
                 "    shape.moveTo(points[0][0], points[0][1]);",
@@ -356,11 +364,32 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
                 "      shape.lineTo(points[i][0], points[i][1]);",
                 "    }",
                 "  }",
+                "  // Cutouts (e.g. an oval wire-cutter hole) as THREE.Path added to shape.holes —",
+                "  // dep-free boolean subtraction via the tessellator, no CSG library needed.",
+                "  for (const loop of holes ?? []) {",
+                "    if (loop.length < 3) continue;",
+                "    const path = new THREE.Path();",
+                "    path.moveTo(loop[0][0], loop[0][1]);",
+                "    for (let i = 1; i < loop.length; i += 1) path.lineTo(loop[i][0], loop[i][1]);",
+                "    path.closePath();",
+                "    shape.holes.push(path);",
+                "  }",
                 "  return shape;",
                 "}",
                 "",
-                "function buildExtrudeGeometry(profile: { points: [number, number][]; depth: number }): THREE.ExtrudeGeometry {",
-                "  const shape = buildExtrudeShape(profile.points);",
+                "// Build an N-gon oval loop (for hole authoring from a compact {cx,cy,rx,ry} descriptor).",
+                "function ovalLoop(cx: number, cy: number, rx: number, ry: number, seg = 24): [number, number][] {",
+                "  const loop: [number, number][] = [];",
+                "  for (let i = 0; i < seg; i += 1) {",
+                "    const a = (i / seg) * Math.PI * 2;",
+                "    loop.push([cx + Math.cos(a) * rx, cy + Math.sin(a) * ry]);",
+                "  }",
+                "  return loop;",
+                "}",
+                "",
+                "function buildExtrudeGeometry(profile: { points: [number, number][]; depth: number; holes?: [number, number][][]; ovalHoles?: { cx: number; cy: number; rx: number; ry: number }[] }): THREE.ExtrudeGeometry {",
+                "  const holes = [...(profile.holes ?? []), ...((profile.ovalHoles ?? []).map((o) => ovalLoop(o.cx, o.cy, o.rx, o.ry)))];",
+                "  const shape = buildExtrudeShape(profile.points, holes);",
                 "  return new THREE.ExtrudeGeometry(shape, {",
                 "    depth: profile.depth,",
                 "    bevelEnabled: false,",
@@ -386,6 +415,12 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
                 "  const xG = st[0][0];",
                 "  const xT = st[st.length - 1][0];",
                 "  const len = (xT - xG) || 1;",
+                "  // Actual blade Y bounds (stations are [x, topY, botY]) — v must span THESE, not a",
+                "  // hardcoded ±0.12: a blade positioned off-origin would otherwise clamp v→1 and make",
+                "  // every face sample the bright spine-rim row (the white-tip/washed-facet bug).",
+                "  let yMin = Infinity, yMax = -Infinity;",
+                "  for (const s of st) { yMin = Math.min(yMin, s[2]); yMax = Math.max(yMax, s[1]); }",
+                "  const yH = (yMax - yMin) || 1;",
                 "  const ring = (s: [number, number, number]): [number, number, number][] => {",
                 "    const [x, topY, botY] = s;",
                 "    const h = Math.max(1e-4, topY - botY);",
@@ -415,7 +450,7 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
                 "  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));",
                 "  g.computeVertexNormals();",
                 "  const uv: number[] = [];",
-                "  for (let t = 0; t < pos.length; t += 3) uv.push((pos[t] - xG) / len, (pos[t + 1] + 0.12) / 0.24);",
+                "  for (let t = 0; t < pos.length; t += 3) uv.push((pos[t] - xG) / len, (pos[t + 1] - yMin) / yH);",
                 "  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));",
                 "  return g;",
                 "}",
@@ -1120,7 +1155,7 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
         lines.extend(
             [
                 "",
-                f"  // repetition system: {system.get('id') or rep_var} ({mode}, count={count}, level={level})",
+                f"  // repetition system: {system.get('id') or rep_var} (InstancedMesh, {mode}, count={count}, level={level})",
                 "  {",
                 f"    const parent = nodes[{json.dumps(parent_id)}] ?? root;",
                 f"    const geo = {geometry_for(primitive, {})};",
@@ -1130,17 +1165,26 @@ def generate(spec: dict[str, Any], pass_id: str) -> str:
                 f"    const radius = {float(radius) if isinstance(radius, (int, float)) else 0.0};",
                 "    const seed = Math.abs(axis.z) < 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0);",
                 "    const perp = new THREE.Vector3().crossVectors(axis, seed).normalize();",
+                "    // One InstancedMesh = one draw call for all repeated parts (teeth/fasteners/spokes),",
+                "    // replacing the former per-instance Mesh clone loop (real-time perf principle).",
+                f"    const cluster = new THREE.InstancedMesh(geo, mat, {count});",
+                "    const _m = new THREE.Matrix4();",
+                "    const _p = new THREE.Vector3();",
+                "    const _q = new THREE.Quaternion();",
+                "    const _s = new THREE.Vector3(scl[0], scl[1], scl[2]);",
                 f"    for (let i = 0; i < {count}; i++) {{",
                 f"      const ang = (({float(start_deg) if isinstance(start_deg,(int,float)) else 0.0}) + (i * 360) / {count}) * Math.PI / 180;",
                 "      const dir = perp.clone().applyQuaternion(new THREE.Quaternion().setFromAxisAngle(axis, ang));",
-                "      const inst = new THREE.Mesh(geo, mat);",
-                "      inst.scale.set(scl[0], scl[1], scl[2]);",
-                "      if (radius > 0) inst.position.copy(dir.clone().multiplyScalar(radius * 0.5));",
-                "      inst.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), dir));",
-                "      inst.castShadow = options.castShadow ?? true;",
-                "      inst.receiveShadow = options.receiveShadow ?? true;",
-                "      parent.add(inst);",
+                "      _p.copy(radius > 0 ? dir.clone().multiplyScalar(radius * 0.5) : new THREE.Vector3());",
+                "      _q.setFromUnitVectors(new THREE.Vector3(1, 0, 0), dir);",
+                "      _m.compose(_p, _q, _s);",
+                "      cluster.setMatrixAt(i, _m);",
                 "    }",
+                "    cluster.instanceMatrix.needsUpdate = true;",
+                "    cluster.castShadow = options.castShadow ?? true;",
+                "    cluster.receiveShadow = options.receiveShadow ?? true;",
+                f"    cluster.name = {json.dumps(str(system.get('id') or rep_var))};",
+                "    parent.add(cluster);",
                 "  }",
             ]
         )

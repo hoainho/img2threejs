@@ -330,18 +330,51 @@ class PipelineTest(unittest.TestCase):
         self.assertNotIn("function buildLatheGeometry", ts)
         self.assertNotIn("function buildTubeGeometry", ts)
 
-    def test_generate_factory_raises_named_error_for_unimplemented_primitive(self):
-        # F.1: instanced-cluster is still genuinely unimplemented — must fail loudly
-        # (named error surfaced via parser.error), never silently box. (curve-sweep is
-        # now implemented in F.6 — see test_generate_factory_builds_curve_sweep.)
+    def test_instanced_cluster_component_now_implemented(self):
+        # instanced-cluster used to fall through geometry_for() and fail loudly; it now
+        # resolves to its base geometry (default box) so a component may declare it without
+        # crashing. The instancing itself is applied by repetition systems (test below).
         run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
         spec = json.loads(self.spec.read_text())
         spec["componentTree"][0]["primitive"] = "instanced-cluster"
         self.spec.write_text(json.dumps(spec))
         out = self.dir / "createOakModel.ts"
         r = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out)
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("no codegen implementation yet", r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("BoxGeometry", out.read_text())
+
+    def test_repetition_system_emits_instanced_mesh(self):
+        # Repeated parts (teeth/fasteners/spokes) must render as ONE THREE.InstancedMesh
+        # (single draw call), not a per-instance Mesh clone loop (real-time perf principle).
+        run("stage2_spec/new_sculpt_spec.py", "Oak", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        first_mat = (spec.get("materials") or [{}])[0].get("id", "base")
+        spec["repetitionSystems"] = [{
+            "id": "teeth", "level": "macro", "parent": "root", "count": 8,
+            "primitive": "box", "material": first_mat,
+            "instanceScale": [0.05, 0.05, 0.05],
+            "placement": {"mode": "radial", "axis": [0, 0, 1], "radius": 0.5, "startAngleDeg": 0},
+        }]
+        self.spec.write_text(json.dumps(spec))
+        out = self.dir / "createOakModel.ts"
+        r = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ts = out.read_text()
+        self.assertIn("new THREE.InstancedMesh(geo, mat, 8)", ts)
+        self.assertIn("setMatrixAt", ts)
+        self.assertNotIn("new THREE.Mesh(geo, mat)", ts)  # no leftover clone loop
+
+    def test_geometry_for_raises_for_unimplemented_primitive(self):
+        # The GeometryNotImplementedError guard still protects any FUTURE primitive added to
+        # VALID_PRIMITIVES without a geometry_for() branch (never a silent box fallback).
+        import importlib.util
+        gen_path = SCRIPTS / "stage3_build" / "generate_threejs_factory.py"
+        sys.path.insert(0, str(SCRIPTS / "stage3_build"))
+        mod_spec = importlib.util.spec_from_file_location("gen_factory_test", gen_path)
+        gen = importlib.util.module_from_spec(mod_spec)
+        mod_spec.loader.exec_module(gen)
+        with self.assertRaises(gen.GeometryNotImplementedError):
+            gen.geometry_for("some-future-unimplemented-primitive")
 
     def test_generate_factory_builds_curve_sweep(self):
         # F.6: curve-sweep sweeps a thin cross-section along a 3D spine so a curved form
@@ -372,6 +405,52 @@ class PipelineTest(unittest.TestCase):
         r2 = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out, "--force")
         self.assertEqual(r2.returncode, 0, r2.stderr)
         self.assertNotIn("function buildCurveSweepGeometry", out.read_text())
+
+    def test_ground_blade_uv_uses_actual_y_bounds(self):
+        # US-7: ground-blade UVs must map v across the blade's ACTUAL Y bounds, not a hardcoded
+        # ±0.12. An off-origin blade (y~0.4) with the old formula clamped v→1 so every face sampled
+        # the bright spine-rim row → white/washed tip facets. Corrected UV = (y - yMin) / yH.
+        run("stage2_spec/new_sculpt_spec.py", "Blade", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        c = spec["componentTree"][0]
+        c["primitive"] = "ground-blade"
+        c["topologyClass"] = "continuous-sculpt"
+        c["topologyRationale"] = "Blade lofted along beveled stations to a sharp point."
+        c["geometryDescriptor"]["bladeSpec"] = {
+            "stations": [[0, 0.55, 0.30], [0.5, 0.56, 0.31], [1.0, 0.50, 0.40]],
+            "thickness": 0.05,
+        }
+        self.spec.write_text(json.dumps(spec))
+        out = self.dir / "createBladeModel.ts"
+        r = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ts = out.read_text()
+        self.assertIn("yMin = Math.min(yMin, s[2])", ts)   # bounds from actual stations
+        self.assertIn("(pos[t + 1] - yMin) / yH", ts)      # v spans real height
+        self.assertNotIn("+ 0.12) / 0.24", ts)             # old hardcoded formula gone
+
+    def test_extrude_supports_oval_hole_via_shape_holes(self):
+        # US-8: a cutout (wire-cutter oval hole) is done via THREE.Shape.holes — dep-free, no
+        # three-bvh-csg. The generator must emit hole-handling + oval-loop support on extrude.
+        run("stage2_spec/new_sculpt_spec.py", "Blade", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        c = spec["componentTree"][0]
+        c["primitive"] = "extrude"
+        c["topologyClass"] = "continuous-sculpt"
+        c["topologyRationale"] = "Flat blade plate with an oval wire-cutter cutout."
+        c["geometryDescriptor"]["profile2D"] = {
+            "points": [[-0.05, 0.0], [0.05, 0.0], [0.0, 0.6]],
+            "depth": 0.02,
+            "ovalHoles": [{"cx": 0.0, "cy": 0.3, "rx": 0.02, "ry": 0.035}],
+        }
+        self.spec.write_text(json.dumps(spec))
+        out = self.dir / "createBladeModel.ts"
+        r = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ts = out.read_text()
+        self.assertIn("shape.holes.push(path)", ts)   # cutout via Shape.holes
+        self.assertIn("ovalLoop", ts)                  # oval-hole authoring helper
+        self.assertNotIn("three-bvh-csg", ts)          # no CSG dependency
 
     def test_flatness_pre_check_flags_thin_continuous_sculpt_extrude(self):
         # G.1: a continuous-sculpt form (asserted to be a volumetric 3D shape) built as a
