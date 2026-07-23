@@ -49,7 +49,8 @@ def _rarity_name(record: dict) -> str:
     return str(rarity or "")
 
 
-def match_records(records: list[dict], weapon: str, skin: str, phase: str | None) -> list[dict]:
+def match_records(records: list[dict], weapon: str, skin: str, phase: str | None,
+                  paint_index: int | None = None) -> list[dict]:
     weapon_l, skin_l = weapon.lower(), skin.lower()
     phase_l = phase.lower() if phase else None
     matches = []
@@ -60,6 +61,8 @@ def match_records(records: list[dict], weapon: str, skin: str, phase: str | None
         if skin_l not in name_l:
             continue
         if phase_l is not None and phase_l not in name_l:
+            continue
+        if paint_index is not None and str(record.get("paint_index")) != str(paint_index):
             continue
         matches.append(record)
     return matches
@@ -82,6 +85,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--weapon", required=True, help="Weapon name, e.g. 'Karambit'")
     parser.add_argument("--skin", required=True, help="Skin/paint kit name substring, e.g. 'Doppler'")
     parser.add_argument("--phase", help="Disambiguating phase substring, e.g. 'Phase 2' or 'Emerald'")
+    parser.add_argument("--paint-index", type=int, dest="paint_index",
+                        help="Exact paint_index to disambiguate when names collide (e.g. CSGO-API lists "
+                             "every Doppler phase as the same name; --paint-index 419 picks Phase 2).")
     parser.add_argument("--index-file", type=Path, help="Local CSGO-API skins JSON")
     parser.add_argument("--index-url", help="Remote CSGO-API skins JSON URL")
     parser.add_argument("--out", type=Path, help="Write the resolved metadata JSON here")
@@ -96,15 +102,15 @@ def main(argv: list[str]) -> int:
         print(f"error: could not load skin index: {exc}", file=sys.stderr)
         return 2
 
-    matches = match_records(records, args.weapon, args.skin, args.phase)
+    matches = match_records(records, args.weapon, args.skin, args.phase, args.paint_index)
     if not matches:
         print(f"error: no match for weapon={args.weapon!r} skin={args.skin!r} "
               f"phase={args.phase!r}; refine the query (nothing guessed)", file=sys.stderr)
         return 2
     if len(matches) > 1:
-        names = "; ".join(str(m.get("name")) for m in matches)
-        print(f"error: ambiguous match ({len(matches)}): {names}. Add --phase to disambiguate "
-              "(nothing guessed).", file=sys.stderr)
+        names = "; ".join(f"{m.get('name')} (paint_index={m.get('paint_index')})" for m in matches)
+        print(f"error: ambiguous match ({len(matches)}): {names}. Add --phase or --paint-index to "
+              "disambiguate (nothing guessed).", file=sys.stderr)
         return 2
 
     metadata = to_metadata(matches[0])

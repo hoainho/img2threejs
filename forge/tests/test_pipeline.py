@@ -790,6 +790,34 @@ class PipelineTest(unittest.TestCase):
         record = json.loads(out.read_text())
         self.assertEqual(record["paintIndex"], 419)
 
+    def test_fetch_cs2_metadata_paint_index_disambiguates_identical_names(self):
+        # The real CSGO-API lists every Doppler phase under the SAME name, differing only by
+        # paint_index -- so --phase (a name substring) cannot pick one, but --paint-index can.
+        index = self.dir / "skins.json"
+        # paint_index is a STRING in the real CSGO-API dataset -- match must handle that
+        index.write_text(json.dumps([
+            {"name": "★ Karambit | Doppler", "weapon": {"name": "Karambit"}, "paint_index": "418",
+             "min_float": 0.0, "max_float": 0.08, "rarity": {"name": "Covert"}, "image": "https://example.test/418.png"},
+            {"name": "★ Karambit | Doppler", "weapon": {"name": "Karambit"}, "paint_index": "419",
+             "min_float": 0.0, "max_float": 0.08, "rarity": {"name": "Covert"}, "image": "https://example.test/419.png"},
+        ]))
+        # --phase "Phase 2" is not in these identical names at all -> no match, cannot help here
+        no_match = run("stage1_intake/fetch_cs2_metadata.py", "--weapon", "Karambit", "--skin", "Doppler",
+                       "--phase", "Phase 2", "--index-file", index)
+        self.assertNotEqual(no_match.returncode, 0)
+        self.assertIn("no match", no_match.stderr.lower())
+        # without --phase the two collide -> ambiguous, and the error lists each paint_index to pick from
+        amb = run("stage1_intake/fetch_cs2_metadata.py", "--weapon", "Karambit", "--skin", "Doppler",
+                  "--index-file", index)
+        self.assertNotEqual(amb.returncode, 0)
+        self.assertIn("paint_index=419", amb.stderr)
+        # --paint-index picks exactly one
+        out = self.dir / "meta.json"
+        r = run("stage1_intake/fetch_cs2_metadata.py", "--weapon", "Karambit", "--skin", "Doppler",
+                "--paint-index", "419", "--index-file", index, "--out", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(str(json.loads(out.read_text())["paintIndex"]), "419")
+
     def test_locate_cs2_vpk_returns_not_found_when_absent(self):
         r = run("stage1_intake/locate_cs2_vpk.py", "--root", self.dir, "--json")
         self.assertEqual(r.returncode, 1)
