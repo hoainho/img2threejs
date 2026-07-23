@@ -10,13 +10,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 
 # CS2 (Source 2) ships the paints under game/csgo relative to the install dir.
 _VPK_RELATIVE = Path("steamapps/common/Counter-Strike Global Offensive/game/csgo/pak01_dir.vpk")
-_LIBRARY_FOLDERS = Path("steamapps/libraryfolders.vdf")
 
 
 def default_steam_roots() -> list[Path]:
@@ -34,32 +32,19 @@ def default_steam_roots() -> list[Path]:
     ]
 
 
-def _library_paths_from_vdf(steam_root: Path) -> list[Path]:
-    """Parse extra Steam library folders out of libraryfolders.vdf (best-effort regex, no vdf dep)."""
-    vdf = steam_root / _LIBRARY_FOLDERS
-    try:
-        text = vdf.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return []
-    # entries look like:  "path"    "D:\\SteamLibrary"
-    return [Path(match) for match in re.findall(r'"path"\s+"([^"]+)"', text)]
-
-
 def locate_vpk(roots: list[Path] | None = None) -> Path | None:
-    """Return the first existing pak01_dir.vpk across the given (or default) Steam roots plus any
-    library folders they declare. Dependency-injectable `roots` keeps this testable offline."""
+    """Return the first existing pak01_dir.vpk across the given (or default) Steam roots.
+    Dependency-injectable `roots` keeps this testable offline."""
     search_roots = list(roots) if roots else default_steam_roots()
     seen: set[Path] = set()
     for root in search_roots:
         root = Path(root)
-        candidates = [root, *_library_paths_from_vdf(root)]
-        for candidate in candidates:
-            if candidate in seen:
-                continue
-            seen.add(candidate)
-            vpk = candidate / _VPK_RELATIVE
-            if vpk.is_file():
-                return vpk
+        if root in seen:
+            continue
+        seen.add(root)
+        vpk = root / _VPK_RELATIVE
+        if vpk.is_file():
+            return vpk
     return None
 
 

@@ -32,8 +32,8 @@ extracting textures.
 locate_cs2_vpk.py --json          # or --root <steam-root> (repeatable) to override
 ```
 
-Searches per-OS default Steam roots plus any libraries declared in `steamapps/libraryfolders.vdf`,
-for `.../Counter-Strike Global Offensive/game/csgo/pak01_dir.vpk`. Best-effort and non-fatal:
+Searches the per-OS default Steam roots (override or add more with repeatable `--root`) for
+`.../Counter-Strike Global Offensive/game/csgo/pak01_dir.vpk`. Best-effort and non-fatal:
 prints `{"found": false, ...}` and exits 1 when nothing is located (never raises). `--root` is
 dependency-injectable for offline testing.
 
