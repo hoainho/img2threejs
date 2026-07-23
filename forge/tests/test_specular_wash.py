@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan 1.4 US-5: Divine Eye specular_wash (report-only). A saturated reference rendered
+"""Divine Eye specular_wash (report-only). A saturated reference rendered
 desaturated + hue-drifted toward cyan must be flagged; a hue-matched render must not. Stdlib.
 """
 from __future__ import annotations

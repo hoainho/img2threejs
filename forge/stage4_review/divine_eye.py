@@ -162,7 +162,7 @@ def hue_zone_parity(reference_png: Path, render_png: Path, axis: str = "u",
                     bands: int = HUE_ZONE_BANDS) -> float:
     """Fraction of along-axis bands whose median colour matches the reference within CIEDE2000
     ≤ HUE_ZONE_DELTA_E. Catches "purple rendered blue" that luma/structure signals miss.
-    Report-only (no ensemble weight) until calibrated on the labeled corpus (US-6)."""
+    Report-only (no ensemble weight) until calibrated on the labeled corpus."""
     ref = _banded_median_lab(reference_png, axis, bands)
     ren = _banded_median_lab(render_png, axis, bands)
     matched = 0
@@ -311,7 +311,7 @@ def evaluate(reference_png: Path, render_png: Path) -> dict[str, Any]:
         objectness = None
 
     # hue_zone_parity: colour-aware along-axis hue match (CIEDE2000). REPORT-ONLY — not in the
-    # weighted ensemble until calibrated on the labeled corpus (US-6). Catches "purple→blue" that
+    # weighted ensemble until calibrated on the labeled corpus. Catches "purple→blue" that
     # every luma/structure signal above is blind to. Graceful: degrades to None on error.
     try:
         hue_zone: float | None = hue_zone_parity(reference_png, render_png)
@@ -400,7 +400,7 @@ def evaluate(reference_png: Path, render_png: Path) -> dict[str, Any]:
         "reference": str(reference_png.resolve()),
         "render": str(render_png.resolve()),
         "note": "deterministic ensemble; zero VLM/token. hueZoneParity is REPORT-ONLY (colour-aware, "
-                "CIEDE2000) — not yet in the weighted fidelity; promote after corpus calibration (US-6). "
+                "CIEDE2000) — not yet in the weighted fidelity; promote after corpus calibration. "
                 "VLM layer (§3.4) runs only if this passes.",
     }
 

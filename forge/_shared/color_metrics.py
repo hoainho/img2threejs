@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Perceptual colour math for the harness — pure stdlib. (Plan 1.4 Q2 / Context Part 2.2)
+"""Perceptual colour math for the harness — pure stdlib (sRGB→CIELAB + CIEDE2000).
 
 Canonical sRGB→CIELAB and the full CIEDE2000 (ΔE00) difference, used by the Divine Eye
 hue-zone signal and any per-region colour check. CIEDE2000 corrects CIELAB's non-uniformity

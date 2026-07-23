@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan 1.4 US-4: Divine Eye hue_zone_parity (report-only, CIEDE2000).
+"""Divine Eye hue_zone_parity (report-only, CIEDE2000).
 Same-shape wrong-hue render must score LOWER than a right-hue render. Pure stdlib.
 """
 from __future__ import annotations

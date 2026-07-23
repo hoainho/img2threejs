@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Verify CIEDE2000 against Sharma et al.'s canonical published test pairs (tolerance 1e-3).
-Plan 1.4 Q2. Pure stdlib, zero token.
+Pure stdlib, zero token.
 """
 from __future__ import annotations
 
