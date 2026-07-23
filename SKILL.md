@@ -57,20 +57,35 @@ Full flags: `grimoire/scripts.md`. Never let a script *score* visuals — that i
    skins**: always pass `--cs2`, which defaults the complexity tier to `ultra-complex`
    (`targetMinDetails` 16) — the finish/wear/hardware is the item, so CS2 is held to the top
    fidelity bar; `targetMinDetails` never drops below the 9 floor even if downgraded by hand.
-   CS2 finish/float/paint-seed/environment rulebook: `grimoire/build/cs2_finishes.md`; optional
-   exact-texture acquisition: `grimoire/intake/cs2_texture_acquisition.md`.
+   **Author procedural GEOMETRY (blade/guard/grip profiles) but make the FINISH a de-lit
+   reference-crop PROJECTION, not a procedural finish material** — projecting the photo's own
+   pixels is what reaches reference fidelity for patterned skins (Doppler/Gamma/Marble/Fade), and
+   is what the v1.3 baseline demos do; a procedural finish for a patterned skin reads visibly wrong
+   against the reference. Take the projection path in step 2c (it generalizes from characters to
+   any reference-matched surface). Procedural finish is the fallback ONLY when live view-dependent
+   response matters more than matching this one reference. Finish routes + rulebook:
+   `grimoire/build/cs2_finishes.md`; optional exact-texture acquisition:
+   `grimoire/intake/cs2_texture_acquisition.md`.
 2b. **Detail inventory** (do not skip for detailed subjects) — scan zones and enumerate every
    identity-defining small detail (gloss, bevel, fasteners, linework, contours, stains):
    `forge/stage1_intake/build_detail_inventory.py <image> --mode grid-3x3 --out-dir <dir> --out di.json`.
    Each detail MUST map to a `component.localFeatures` or `material.localOverrides` entry — never
    prose only. Taxonomy + 3D-term recipes: `grimoire/intake/detail_inventory.md`.
-2c. **Character/hybrid subjects** — capture head-unit proportions + facial/body landmarks:
-   `forge/stage1_intake/extract_landmarks.py <image> --out anatomy.json --overlay overlay.png`, then
-   fill `preSpecAssessment.anatomy`. Route: `grimoire/character/reconstruction.md`. For maximum
-   likeness use the projection-first path (`grimoire/character/likeness_maximization.md`): solve the camera
-   (`stage1_intake/solve_camera_pose.py`), de-light the photo (`stage1_intake/delight_albedo.py`), and project it onto
-   the fitted mesh (`stage3_build/bake_projected_texture.py`). A single image cannot guarantee 100% likeness —
-   report per-region confidence and request more views for a real person.
+2c. **Projection-first fidelity (characters AND reference-matched surfaces — CS2 skins, decals,
+   painted patterns)** — when the goal is matching a specific reference's surface, put the photo's
+   own pixels on the mesh instead of approximating them procedurally. This is the single biggest
+   fidelity lever; a procedural material for a patterned surface is the #1 reconstruction failure.
+   Recipe (`grimoire/character/likeness_maximization.md` — its two levers, align-mesh+camera and
+   project-the-photo, generalize past characters): solve the camera
+   (`stage1_intake/solve_camera_pose.py` → `referenceCamera`), **de-light** the reference so it is
+   free of baked lighting (`stage1_intake/delight_albedo.py`, hard requirement — this is what makes
+   projection safe, not the flat-lit icon), then project the de-lit crop onto the mesh and bake it
+   into UVs (`stage3_build/bake_projected_texture.py --mesh-id <id>`). For a CS2 skin the mesh is the
+   procedural blade/guard/grip you author in the spec, and the projected de-lit crop IS the finish
+   (front + back from the two views) — no procedural Doppler material. For characters, first capture
+   landmarks (`stage1_intake/extract_landmarks.py --out anatomy.json`), fill `preSpecAssessment.anatomy`,
+   route `grimoire/character/reconstruction.md`. A single view cannot show hidden sides — report
+   per-region confidence and request more views when it matters.
 3. Author the spec from the assessment:
    `forge/stage2_spec/new_sculpt_spec.py "Name" --image <img> --assessment assessment.json --out object-sculpt-spec.json`.
    Replace generic starter `featureReviewTargets` with the object's real identity-defining

@@ -5,9 +5,26 @@ reference image is the only required input. A skin name, descriptor (`finishStyl
 `paintSeed`), or an extracted Valve texture are optional layers that add exactness when the user
 supplies them — they never block the default path.
 
-The finish is built **procedurally per finish style** — the observed 2D icon is *never* painted
-onto the mesh as albedo. An icon is a flat render with baked lighting, no paint-seed, no PBR
-channels, and no environment response; reprojecting it locks in one wrong, flat-lit pattern.
+**Two finish routes, chosen by goal — do NOT default to procedural for a reference-match.**
+
+- **Projection (default when the goal is matching a specific reference image — e.g. rebuilding a
+  named skin from its photo):** author the geometry procedurally, then project the **de-lit**
+  reference crop onto the blade/grip as the finish and bake it into UVs — camera-match
+  (`solve_camera_pose.py`) → de-light (`delight_albedo.py`) → project + bake
+  (`bake_projected_texture.py`). Recipe: `grimoire/character/likeness_maximization.md` (its levers
+  generalize from faces to objects). This is what reaches reference fidelity for patterned finishes
+  (Doppler / Gamma Doppler / Marble Fade / Fade), and is what the v1.3 baseline demos use. A
+  procedural finish for a patterned skin reads visibly wrong beside the reference — that mismatch
+  is the #1 CS2 fidelity failure.
+- **Procedural per finish style (default ONLY when live view-dependent response matters more than
+  matching one reference):** build the finish from independent PBR channels + paint-seed for a real
+  environment/anodized response.
+
+**Never** project the raw 2D inventory **icon** as albedo: an icon is a flat render with baked
+lighting, no paint-seed, no PBR channels, no environment response; projecting *that* locks in one
+wrong, flat-lit pattern. The projection route sidesteps this by **de-lighting first** — the real
+distinction is *de-lit reference crop* (the fidelity path) vs *raw flat-lit icon* (banned), NOT
+projection vs procedural.
 
 ## Identity precedence (who decides the finish style)
 
