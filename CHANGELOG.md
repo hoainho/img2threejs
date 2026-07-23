@@ -32,8 +32,32 @@ input integrity, geometry-truth gates, and reference-grounded texture/material a
 - **Color-gate fix** — `diagnose_render.py` `color_is_gated(pass_id)` (color hard-fail only from
   the material pass onward, so clay blockouts don't false-fail).
 
+### Added — reconstruction-fidelity upgrades (folded into 1.3)
+- **Reference-grounded gradient stops** — `stage1_intake/extract_gradient_stops.py`: foreground-masked
+  per-band median sampling extracts a material's true gradient from the reference (kills hand-guessed
+  STOPS), names hue zones, and flags blue-leaning violet/blue stops (`B > R`) as `blue-collapse`
+  (collapses to blue under tone-mapping) with a magenta-lean suggested correction.
+- **`candy-coat` finish class** — `stage1_intake/analyze_texture.py`: an anodized/PVD/doppler
+  dielectric-led recipe (metalness 0.35 / clearcoat 0.60 / envMapIntensity 0.70) so a saturated
+  coloured coat keeps its hue instead of the environment stealing it; chrome-specular stays
+  `gem-metal`, bright-clean stays `gemstone`. Plus a `paletteHueRisk` hue-survival annotation.
+- **CIEDE2000 colour math** — `_shared/color_metrics.py`: sRGB→CIELAB + full ΔE00, verified against
+  the canonical Sharma test pairs.
+- **Colour-aware Divine Eye signals (report-only)** — `hue_zone_parity` (per-band CIEDE2000 along the
+  axis; catches "purple rendered blue" that luma/structure signals miss) and `specular_wash`
+  (saturation-decay + hue-drift-toward-cyan detector). Both ship report-only (no ensemble weight)
+  until calibrated, so they never silently move a verdict.
+- **InstancedMesh emission** — repetition systems now emit one `THREE.InstancedMesh` (single
+  draw-call) instead of a per-instance `Mesh` clone loop; the `instanced-cluster` primitive resolves
+  to its base geometry instead of failing.
+- **`ground-blade` UV fix** — blade UVs now span the geometry's actual Y bounds instead of a
+  hardcoded range, so an off-origin blade no longer clamps every face to the bright spine-rim row
+  (the flat "one colour" / white-tip bug); the length gradient reads correctly.
+- **Dep-free cutouts** — `extrude` supports `THREE.Shape.holes` + an `ovalLoop` helper (e.g. a
+  wire-cutter oval hole) with no CSG dependency.
+
 ### Notes
-- Pure Python 3.10+ stdlib in `forge/` (no pip installs). 16/16 forge test suites green at tag.
+- Pure Python 3.10+ stdlib in `forge/` (no pip installs). 20/20 forge test suites green.
 - Grimoire lessons updated: shading realism (hue-survival under tone-mapping; reference beats prose),
   geometry patterns, self-correction.
 
