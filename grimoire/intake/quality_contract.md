@@ -35,6 +35,15 @@ Map total judgment to:
 - `complex`: many parts, repeated systems, multiple materials, several hierarchy levels
 - `ultra-complex`: dense organic/mechanical/architectural structure where fidelity depends on deep hierarchy and repeated microstructure
 
+### CS2 items: detail floor, no exception
+
+A CS2 weapon/knife/glove skin always carries more identity-defining detail (finish/gradient
+pattern, wear layer, hardware, stitching, fasteners, engraving) than a generic object at the
+same structural complexity tier — the skin *is* the point of the item. So `targetMinDetails`
+for a CS2 item is never below **9**, regardless of which complexity tier the structure alone
+would suggest (even a structurally `simple` CS2 item still needs 9). Pass `--cs2` to
+`forge/stage2_spec/new_pre_spec_assessment.py` to apply this floor automatically.
+
 ## Quality Contract
 
 Before generating code, define exactly what makes the model good enough:

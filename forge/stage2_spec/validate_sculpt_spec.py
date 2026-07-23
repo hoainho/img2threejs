@@ -396,6 +396,29 @@ def validate_reference_pbr(material_id: str, value: Any, errors: list[str], warn
             validate_reference_pbr_map(maps[channel], f"material {material_id!r} referencePbr.maps.{channel}", errors)
 
 
+def validate_cs2_view_dependent_environment(spec: dict[str, Any], errors: list[str]) -> None:
+    """View-dependent CS2 finishes (anodized / anodized-multicolored) read their color from
+    environment reflections -- rendering one with no environment at all is a muddy-render gate
+    failure, not a quality nit. The code-generated default environment always exists unless
+    explicitly disabled (cs2Finish.environmentAvailable = false), so this only fires as the
+    last-resort guard described in design.md, never on the default image-only path.
+    See grimoire/build/cs2_finishes.md."""
+    materials = [m for m in spec.get("materials", []) if isinstance(m, dict)]
+    view_dependent = [m for m in materials if m.get("needsEnvironment") is True]
+    if not view_dependent:
+        return
+    cs2_finish = spec.get("cs2Finish")
+    environment_available = not (isinstance(cs2_finish, dict) and cs2_finish.get("environmentAvailable") is False)
+    if not environment_available:
+        names = ", ".join(str(m.get("id")) for m in view_dependent)
+        errors.append(
+            f"material(s) {names} are view-dependent and need an environment map (scene.environment) "
+            "or they render muddy, but cs2Finish.environmentAvailable is false -- enable the "
+            "code-generated default environment or supply a user HDRI before generating "
+            "(see grimoire/build/cs2_finishes.md)"
+        )
+
+
 def validate_materials(spec: dict[str, Any], errors: list[str], warnings: list[str]) -> set[str]:
     material_ids: set[str] = set()
     for index, material in enumerate(spec.get("materials", [])):
@@ -1846,6 +1869,7 @@ def validate_spec(spec: dict[str, Any]) -> tuple[list[str], list[str]]:
     validate_look_dev_targets(spec, errors, warnings)
     evidence_ids = validate_evidence(spec, errors, warnings)
     material_ids = validate_materials(spec, errors, warnings)
+    validate_cs2_view_dependent_environment(spec, errors)
     validate_components(spec, material_ids, evidence_ids, errors, warnings)
     lod_plan = spec.get("lodPlan")
     if lod_plan is not None and not isinstance(lod_plan, list):

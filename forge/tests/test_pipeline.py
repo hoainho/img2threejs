@@ -691,6 +691,107 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("createPersonModel", ts)
         self.assertIn('meshes["head"]', ts)
 
+    def test_cs2_anodized_finish_and_environment(self):
+        # Author a Doppler-style (anodized-multicolored) CS2 skin, image-first.
+        run("stage2_spec/new_sculpt_spec.py", "Karambit Doppler", "--cs2",
+            "--finish-style", "anodized-multicolored", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        finish = next(m for m in spec["materials"] if m["id"] == "skin-finish")
+        # view-dependent PBR: high metalness, low roughness, strong environment
+        self.assertGreaterEqual(finish["metalness"]["base"], 0.9)
+        self.assertLessEqual(finish["roughness"]["base"], 0.15)
+        self.assertGreaterEqual(spec["envMapIntensity"], 1.5)
+        self.assertTrue(finish["needsEnvironment"])
+        # authored CS2 seed is no worse than the object baseline: normal validate passes
+        self.assertEqual(run("stage2_spec/validate_sculpt_spec.py", self.spec).returncode, 0)
+        # factory generates and emits the code-generated environment helper
+        out = self.dir / "createCs2Model.ts"
+        r = run("stage3_build/generate_threejs_factory.py", self.spec, "--out", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ts = out.read_text()
+        self.assertIn("Environment", ts)
+        self.assertIn("RoomEnvironment", ts)
+        self.assertIn("PMREMGenerator", ts)
+
+    def test_cs2_track_skipped_for_objects(self):
+        run("stage2_spec/new_sculpt_spec.py", "Crate", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        self.assertNotIn("skin-finish", {m["id"] for m in spec["materials"]})
+
+    def test_cs2_intent_autodetected_from_target_name(self):
+        r = run("stage2_spec/new_pre_spec_assessment.py", "Karambit | Doppler", "--out", self.assessment)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        payload = json.loads(self.assessment.read_text())
+        self.assertTrue(payload["preSpecAssessment"]["objectClass"]["cs2"])
+
+    def test_cs2_identity_precedence_flags_conflict(self):
+        # skin name implies anodized-multicolored (Doppler); vision disagrees with patina.
+        run("stage2_spec/new_sculpt_spec.py", "Item", "--cs2", "--skin-name", "Karambit Doppler",
+            "--vision-finish-style", "patina", "--vision-confidence", "0.9", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        self.assertEqual(spec["cs2Finish"]["finishStyle"], "anodized-multicolored")
+        unknowns = spec["preSpecAssessment"]["unknownsToResolveBeforeImplementation"]
+        self.assertTrue(any("conflict" in u.lower() for u in unknowns))
+
+    def test_cs2_float_and_paint_seed_drive_wear_and_placement(self):
+        run("stage2_spec/new_sculpt_spec.py", "Karambit", "--cs2", "--finish-style", "patina",
+            "--float", "0.7", "--paint-seed", "12345", "--out", self.spec)
+        spec = json.loads(self.spec.read_text())
+        finish = next(m for m in spec["materials"] if m["id"] == "skin-finish")
+        self.assertFalse(finish["wear"]["approximated"])
+        self.assertGreater(finish["wear"]["edgeWear"], 0.5)
+        self.assertEqual(finish["patternPlacement"]["paintSeed"], 12345)
+        self.assertFalse(finish["patternPlacement"]["approximated"])
+
+    def test_cs2_view_dependent_finish_blocked_without_environment(self):
+        run("stage2_spec/new_sculpt_spec.py", "Karambit Doppler", "--cs2",
+            "--finish-style", "anodized-multicolored", "--no-environment", "--out", self.spec)
+        r = run("stage2_spec/validate_sculpt_spec.py", self.spec)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("environment", r.stdout.lower())
+
+    def test_fetch_cs2_metadata_resolves_and_flags_ambiguity(self):
+        index = self.dir / "skins.json"
+        index.write_text(json.dumps([
+            {"name": "Karambit | Doppler (Phase 1)", "weapon": {"name": "Karambit"}, "paint_index": 415,
+             "min_float": 0.0, "max_float": 0.08, "rarity": {"name": "Covert"}, "image": "https://example.test/1.png"},
+            {"name": "Karambit | Doppler (Phase 2)", "weapon": {"name": "Karambit"}, "paint_index": 419,
+             "min_float": 0.0, "max_float": 0.08, "rarity": {"name": "Covert"}, "image": "https://example.test/2.png"},
+        ]))
+        # ambiguous without --phase
+        r = run("stage1_intake/fetch_cs2_metadata.py", "--weapon", "Karambit", "--skin", "Doppler",
+                 "--index-file", index)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("ambiguous", r.stderr.lower())
+        # disambiguated with --phase
+        out = self.dir / "metadata.json"
+        r = run("stage1_intake/fetch_cs2_metadata.py", "--weapon", "Karambit", "--skin", "Doppler",
+                 "--phase", "Phase 2", "--index-file", index, "--out", out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        record = json.loads(out.read_text())
+        self.assertEqual(record["paintIndex"], 419)
+
+    def test_locate_cs2_vpk_returns_not_found_when_absent(self):
+        r = run("stage1_intake/locate_cs2_vpk.py", "--root", self.dir, "--json")
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse(json.loads(r.stdout)["found"])
+
+    def test_extract_cs2_textures_falls_back_without_vpk_or_binary(self):
+        r = run("stage1_intake/extract_cs2_textures.py", "--out", self.dir / "cs2_textures", "--json")
+        self.assertEqual(r.returncode, 1)
+        result = json.loads(r.stdout)
+        self.assertEqual(result["status"], "fallback")
+        self.assertIn("no local CS2 VPK", result["reason"])
+
+    def test_cs2_textures_gitignored_and_never_tracked(self):
+        gitignore = (SKILL / ".gitignore").read_text()
+        self.assertIn("cs2_textures/", gitignore)
+        tracked = subprocess.run(
+            ["git", "-C", str(SKILL), "ls-files", "--", "cs2_textures", "**/cs2_textures"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(tracked.stdout.strip(), "")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

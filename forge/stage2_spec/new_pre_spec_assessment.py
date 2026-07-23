@@ -54,14 +54,41 @@ DETAIL_MINIMUMS = {
     "ultra-complex": 16,
 }
 
+# CS2 weapon/knife/glove skins always carry more identity-defining detail (finish pattern,
+# wear layer, hardware, stitching/fasteners) than a generic object at the same structural
+# complexity tier -- so the detail-count floor never drops below this, no exception, even
+# for a structurally "simple"/"moderate" item.
+CS2_DETAIL_MINIMUM = 9
 
-def make_payload(target_name: str, image: str | None, complexity: str) -> dict:
+# Lightweight keyword heuristic, not exhaustive: catches the common phrasing ("CS2 skin",
+# "AK-47 | Redline", "Karambit Doppler") so --cs2 doesn't have to be typed by hand for the
+# obvious case. A miss here just means the agent (or the user) sets --cs2 explicitly --
+# vision/prompt-based detection beyond this heuristic is inherently the agent's judgment call.
+CS2_INTENT_KEYWORDS = (
+    "cs2", "csgo", "counter-strike", "counter strike", "weapon skin", "knife skin", "glove skin",
+    "doppler", "gamma doppler", "marble fade", "case hardened", "fade",
+    "karambit", "butterfly knife", "bayonet", "gut knife", "falchion", "bowie knife",
+)
+
+
+def detect_cs2_intent(target_name: str) -> bool:
+    lowered = target_name.lower()
+    return " | " in target_name or any(keyword in lowered for keyword in CS2_INTENT_KEYWORDS)
+
+
+def make_payload(target_name: str, image: str | None, complexity: str, is_cs2: bool = False) -> dict:
     assessment = make_pre_spec_assessment(target_name)
     contract = make_quality_contract()
+    is_cs2 = is_cs2 or detect_cs2_intent(target_name)
+    if is_cs2:
+        assessment["objectClass"]["cs2"] = True
     assessment["sourceImage"] = image or ""
     assessment["complexity"]["tier"] = complexity
     assessment["specDepthDecision"]["requiredDepth"] = complexity
-    assessment["detailInventory"]["targetMinDetails"] = DETAIL_MINIMUMS[complexity]
+    target_min_details = DETAIL_MINIMUMS[complexity]
+    if is_cs2:
+        target_min_details = max(target_min_details, CS2_DETAIL_MINIMUM)
+    assessment["detailInventory"]["targetMinDetails"] = target_min_details
     if complexity in {"complex", "ultra-complex"}:
         assessment["specDepthDecision"]["needsRepetitionSystems"] = True
         assessment["specDepthDecision"]["needsMaterialLocalOverrides"] = True
@@ -94,9 +121,14 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("--out", type=Path, help="Output JSON path")
     parser.add_argument("--force", action="store_true", help="Overwrite output file")
+    parser.add_argument(
+        "--cs2",
+        action="store_true",
+        help=f"CS2 weapon/knife/glove skin -- floors targetMinDetails at {CS2_DETAIL_MINIMUM} regardless of complexity tier.",
+    )
     args = parser.parse_args(argv)
 
-    payload = json.dumps(make_payload(args.target_name, args.image, args.complexity), indent=2, ensure_ascii=False) + "\n"
+    payload = json.dumps(make_payload(args.target_name, args.image, args.complexity, args.cs2), indent=2, ensure_ascii=False) + "\n"
     if args.out:
         output = args.out.expanduser().resolve()
         if output.exists() and not args.force:
